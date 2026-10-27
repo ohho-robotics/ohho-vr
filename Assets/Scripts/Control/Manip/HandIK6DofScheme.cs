@@ -22,6 +22,13 @@ namespace OmniBot.VR.Control.Manip
     ///
     /// TODO(OHH-94): radian homes are the URDF zero until real STS3215 ticks
     /// are measured. This scheme does not embed servo tick offsets.
+    ///
+    /// Logic extracted from the archived HandTrackingArmController
+    /// (Archive/legacy-control); the only change is joint names,
+    /// limits, link lengths and topics now come from the
+    /// <see cref="RobotProfile"/> instead of <c>RobotConfig</c> constants. The IK
+    /// solver itself (<see cref="ArmIKSolver"/>) is reused unchanged — it is
+    /// SO-101 geometry, which the OmniBot flagship override pins.
     /// </summary>
     public sealed class HandIK6DofScheme : IManipulationScheme
     {
