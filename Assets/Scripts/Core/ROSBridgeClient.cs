@@ -222,15 +222,21 @@ namespace OmniBot.VR.Core
             if (string.IsNullOrEmpty(topic) || callback == null) return;
             lock (_subscribersLock)
             {
-                if (!_subscribers.ContainsKey(topic))
+                if (!_subscribers.TryGetValue(topic, out var callbacks))
                 {
-                    _subscribers[topic] = new List<Action<string>>();
+                    callbacks = new List<Action<string>>();
+                    _subscribers[topic] = callbacks;
                     var subMsg = new ROSSubscribeMessage(topic, type, throttleRateMs, compression);
                     string wire = JsonConvert.SerializeObject(subMsg);
                     _subscribeWire[topic] = wire;
                     SendJson(wire);
                 }
-                _subscribers[topic].Add(callback);
+                else if (callbacks.Contains(callback))
+                {
+                    return;
+                }
+
+                callbacks.Add(callback);
             }
         }
 
@@ -249,8 +255,8 @@ namespace OmniBot.VR.Core
 
         /// <summary>
         /// Removes one callback. The rosbridge unsubscribe is sent only when
-        /// that was the last listener, so a shared topic such as <c>/odom</c>
-        /// stays up for the other panels.
+        /// that was the last listener, so a HUD refresh cannot tear down the
+        /// recorder or another panel sharing the topic.
         /// </summary>
         public void Unsubscribe(string topic, Action<string> callback)
         {
@@ -259,7 +265,7 @@ namespace OmniBot.VR.Core
             lock (_subscribersLock)
             {
                 if (!_subscribers.TryGetValue(topic, out var list)) return;
-                list.Remove(callback);
+                list.RemoveAll(existing => existing != null && existing.Equals(callback));
                 if (list.Count > 0) return;
                 _subscribers.Remove(topic);
                 _subscribeWire.Remove(topic);
@@ -267,6 +273,19 @@ namespace OmniBot.VR.Core
             }
             if (sendUnsub)
                 SendJson(JsonConvert.SerializeObject(new ROSUnsubscribeMessage(topic)));
+        }
+
+        /// <summary>Unsubscribes every topic this client is listening to.</summary>
+        public void UnsubscribeAll()
+        {
+            List<string> topics;
+            lock (_subscribersLock)
+            {
+                topics = new List<string>(_subscribers.Keys);
+            }
+
+            foreach (var topic in topics)
+                Unsubscribe(topic);
         }
 
         // ── Private helpers ──────────────────────────────────────────────────

@@ -2,7 +2,6 @@ using System;
 using System.IO;
 using System.Text;
 using NUnit.Framework;
-using OmniBot.VR.Core;
 using OmniBot.VR.Latency;
 
 namespace OmniBot.VR.Tests
@@ -17,6 +16,12 @@ namespace OmniBot.VR.Tests
 
         private const string ZeroTwist =
             "{\"linear\":{\"x\":0,\"y\":0,\"z\":0},\"angular\":{\"x\":0,\"y\":0,\"z\":0}}";
+
+        private const string CmdVelTopic = "/cmd_vel/teleop";
+        private const string EmergencyStopTopic = "/emergency_stop";
+        private const string OdomTopic = "/odom";
+        private const string ArmCommandsTopic = "/arm/joint_commands";
+        private const string ArmStatesTopic = "/arm/joint_states";
 
         [TearDown]
         public void TearDown()
@@ -39,7 +44,7 @@ namespace OmniBot.VR.Tests
 
             session.MarkInput();
             clock.Advance(12);
-            link.Publish(RobotConfig.TOPIC_CMD_VEL, MovingTwist);
+            link.Publish(CmdVelTopic, MovingTwist);
             clock.Advance(40);
             session.NoteVideo(clock.NowMs - 30, clock.NowMs, "WebRTC");
             Assert.AreEqual(2, link.Pump());
@@ -70,9 +75,9 @@ namespace OmniBot.VR.Tests
             LatencySession session = new LatencySession(LatencyProfile.Local, clock);
             session.MarkInput();
             clock.Advance(8);
-            string wrapper = "{\"op\":\"publish\",\"topic\":\"" + RobotConfig.TOPIC_CMD_VEL
+            string wrapper = "{\"op\":\"publish\",\"topic\":\"" + CmdVelTopic
                 + "\",\"msg\":" + MovingTwist + "}";
-            session.ObserveOutgoing(RobotConfig.TOPIC_CMD_VEL, wrapper);
+            session.ObserveOutgoing(CmdVelTopic, wrapper);
             LatencyReport report = session.BuildReport();
             AssertSample(report, "input_to_command", 8);
             AssertVerdict(report, "input_to_command", LatencyVerdict.Pass);
@@ -88,7 +93,7 @@ namespace OmniBot.VR.Tests
                 LatencySession session = new LatencySession(profiles[i], clock);
                 session.MarkInput();
                 clock.Advance(12);
-                session.ObserveOutgoing(RobotConfig.TOPIC_CMD_VEL, MovingTwist);
+                session.ObserveOutgoing(CmdVelTopic, MovingTwist);
                 AssertVerdict(session.BuildReport(), "input_to_command", LatencyVerdict.NotMeasured);
 
                 long ack = 1_000_000 + 30;
@@ -115,11 +120,11 @@ namespace OmniBot.VR.Tests
             link.Connect();
             session.MarkInput();
             clock.Advance(10);
-            link.Publish(RobotConfig.TOPIC_CMD_VEL, MovingTwist);
+            link.Publish(CmdVelTopic, MovingTwist);
             clock.Advance(400);
             link.Pump();
             session.MarkInput();
-            link.Publish(RobotConfig.TOPIC_CMD_VEL, MovingTwist);
+            link.Publish(CmdVelTopic, MovingTwist);
 
             Assert.AreEqual(2, link.Published.Count);
             Assert.AreEqual(MovingTwist, link.Published[0].Json);
@@ -135,7 +140,7 @@ namespace OmniBot.VR.Tests
             FakeRobotLink link = new FakeRobotLink(session, clock) { AutoHeartbeat = false };
             link.Connect();
             session.MarkInput();
-            link.Publish(RobotConfig.TOPIC_CMD_VEL, ZeroTwist);
+            link.Publish(CmdVelTopic, ZeroTwist);
             clock.Advance(50);
             Assert.AreEqual(0, link.Pump());
             AssertVerdict(session.BuildReport(), "command_to_motion", LatencyVerdict.NotMeasured);
@@ -149,12 +154,12 @@ namespace OmniBot.VR.Tests
             LatencySession session = new LatencySession(LatencyProfile.Local, clock);
             FakeRobotLink link = new FakeRobotLink(session, clock) { AutoHeartbeat = false };
             link.Connect();
-            link.Publish(RobotConfig.TOPIC_EMERGENCY_STOP, payload);
+            link.Publish(EmergencyStopTopic, payload);
             clock.Advance(80);
             link.Pump();
 
             Assert.AreEqual(1, link.Published.Count);
-            Assert.AreEqual(RobotConfig.TOPIC_EMERGENCY_STOP, link.Published[0].Topic);
+            Assert.AreEqual(EmergencyStopTopic, link.Published[0].Topic);
             Assert.AreEqual(payload, link.Published[0].Json);
             AssertVerdict(session.BuildReport(), "command_to_motion", LatencyVerdict.NotMeasured);
             Assert.IsFalse(HasSegment(session.BuildReport(), "command_to_motion"));
@@ -166,9 +171,9 @@ namespace OmniBot.VR.Tests
             ManualLatencyClock clock = new ManualLatencyClock(20_000);
             LatencySession session = new LatencySession(LatencyProfile.Local, clock);
             session.MarkInput();
-            session.ObserveOutgoing(RobotConfig.TOPIC_CMD_VEL, MovingTwist);
+            session.ObserveOutgoing(CmdVelTopic, MovingTwist);
             clock.Advance(20);
-            session.ObserveIncoming(RobotConfig.TOPIC_ODOM, Odom(clock.NowMs - 10, 0));
+            session.ObserveIncoming(OdomTopic, Odom(clock.NowMs - 10, 0));
             LatencyReport report = session.BuildReport();
             AssertVerdict(report, "command_to_motion", LatencyVerdict.Incomplete);
             AssertSample(report, "telemetry_age", 10);
@@ -181,8 +186,8 @@ namespace OmniBot.VR.Tests
             LatencySession session = new LatencySession(LatencyProfile.Local, new ManualLatencyClock(100));
             Assert.DoesNotThrow(() => session.ObserveOutgoing(null, null));
             Assert.DoesNotThrow(() => session.ObserveIncoming(null, "{"));
-            Assert.DoesNotThrow(() => session.ObserveIncoming(RobotConfig.TOPIC_ODOM, "{{{"));
-            Assert.DoesNotThrow(() => session.ObserveOutgoing(RobotConfig.TOPIC_CMD_VEL, "not-json"));
+            Assert.DoesNotThrow(() => session.ObserveIncoming(OdomTopic, "{{{"));
+            Assert.DoesNotThrow(() => session.ObserveOutgoing(CmdVelTopic, "not-json"));
             LatencyReport report = session.BuildReport();
             Assert.IsFalse(HasSegment(report, "input_to_command"));
             for (int i = 0; i < report.Samples.Count; i++)
@@ -196,7 +201,7 @@ namespace OmniBot.VR.Tests
             LatencySession session = new LatencySession(LatencyProfile.Local, clock);
             session.MarkInput();
             clock.Advance(12);
-            session.ObserveOutgoing(RobotConfig.TOPIC_CMD_VEL, MovingTwist);
+            session.ObserveOutgoing(CmdVelTopic, MovingTwist);
             session.NoteVideo(clock.NowMs - 30, clock.NowMs, "WebRTC");
             LatencyReport report = session.BuildReport();
 
@@ -278,8 +283,8 @@ namespace OmniBot.VR.Tests
             Assert.IsFalse(LatencyCapture.IsEnabled);
             LatencyCapture.MarkInputSample();
             LatencyCapture.ClearInputSample();
-            LatencyCapture.ObserveOutgoing(RobotConfig.TOPIC_CMD_VEL, MovingTwist);
-            LatencyCapture.ObserveIncoming(RobotConfig.TOPIC_ODOM, "{}");
+            LatencyCapture.ObserveOutgoing(CmdVelTopic, MovingTwist);
+            LatencyCapture.ObserveIncoming(OdomTopic, "{}");
             LatencyCapture.NoteVideoFrame(1, 2, "MJPEG");
             LatencyCapture.StopAndWrite();
             Assert.IsNull(LatencyCapture.Active);
@@ -291,10 +296,10 @@ namespace OmniBot.VR.Tests
             ManualLatencyClock clock = new ManualLatencyClock(8_000);
             LatencySession session = new LatencySession(LatencyProfile.Local, clock);
             session.MarkInput();
-            session.ObserveOutgoing(RobotConfig.TOPIC_CMD_VEL, MovingTwist);
+            session.ObserveOutgoing(CmdVelTopic, MovingTwist);
             clock.Advance(5);
             session.MarkInput();
-            session.ObserveOutgoing(RobotConfig.TOPIC_CMD_VEL, MovingTwist);
+            session.ObserveOutgoing(CmdVelTopic, MovingTwist);
             LatencySegmentSummary row = session.BuildReport().Find("command_to_motion");
             Assert.AreEqual(LatencyVerdict.Incomplete, row.Verdict);
             Assert.Greater(row.Incomplete, 0);
@@ -307,8 +312,8 @@ namespace OmniBot.VR.Tests
             ManualLatencyClock clock = new ManualLatencyClock(5_000);
             LatencySession session = new LatencySession(LatencyProfile.Local, clock);
             session.MarkInput();
-            session.ObserveOutgoing(RobotConfig.TOPIC_CMD_VEL, MovingTwist);
-            session.ObserveIncoming(RobotConfig.TOPIC_ODOM, Odom(clock.NowMs + 5, 0.1));
+            session.ObserveOutgoing(CmdVelTopic, MovingTwist);
+            session.ObserveIncoming(OdomTopic, Odom(clock.NowMs + 5, 0.1));
             AssertVerdict(session.BuildReport(), "telemetry_age", LatencyVerdict.Fail);
         }
 
@@ -318,12 +323,12 @@ namespace OmniBot.VR.Tests
             ManualLatencyClock clock = new ManualLatencyClock(2_000_000);
             LatencySession session = new LatencySession(LatencyProfile.Local, clock);
             session.MarkInput();
-            session.ObserveOutgoing(RobotConfig.TOPIC_ARM_COMMANDS, "{\"position\":[0,0]}");
-            session.ObserveOutgoing(RobotConfig.TOPIC_ARM_COMMANDS, "{\"position\":[0.4,0]}");
-            session.ObserveIncoming(RobotConfig.TOPIC_ARM_STATES, JointState(clock.NowMs, "0,0"));
+            session.ObserveOutgoing(ArmCommandsTopic, "{\"position\":[0,0]}");
+            session.ObserveOutgoing(ArmCommandsTopic, "{\"position\":[0.4,0]}");
+            session.ObserveIncoming(ArmStatesTopic, JointState(clock.NowMs, "0,0"));
             AssertVerdict(session.BuildReport(), "command_to_motion", LatencyVerdict.Incomplete);
             clock.Advance(30);
-            session.ObserveIncoming(RobotConfig.TOPIC_ARM_STATES, JointState(clock.NowMs, "0.4,0"));
+            session.ObserveIncoming(ArmStatesTopic, JointState(clock.NowMs, "0.4,0"));
             LatencyReport report = session.BuildReport();
             AssertSample(report, "command_to_motion", 30);
             AssertVerdict(report, "command_to_motion", LatencyVerdict.Pass);
@@ -335,7 +340,7 @@ namespace OmniBot.VR.Tests
             ManualLatencyClock clock = new ManualLatencyClock(1000);
             LatencySession session = new LatencySession(LatencyProfile.Local, clock);
             FakeRobotLink link = new FakeRobotLink(session, clock) { AutoHeartbeat = false };
-            link.Publish(RobotConfig.TOPIC_CMD_VEL, MovingTwist);
+            link.Publish(CmdVelTopic, MovingTwist);
             Assert.AreEqual(0, link.Published.Count);
             Assert.AreEqual(0, session.BuildReport().Samples.Count);
         }
