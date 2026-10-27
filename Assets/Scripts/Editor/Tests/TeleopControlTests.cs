@@ -571,6 +571,122 @@ namespace OmniBot.VR.Tests
         }
 
         [Test]
+        public void TeleopRestart_OtherEndpoint_DoesNotRestoreLatch()
+        {
+            var profile = MakeOmniBotProfile();
+            profile.HasArm = false;
+            profile.ArmDof = 0;
+
+            var host = new GameObject("teleop-endpoint-latch-test");
+            try
+            {
+                var teleop = host.AddComponent<TeleopController>();
+                typeof(TeleopController).GetField("_link", BindingFlags.Instance | BindingFlags.NonPublic)
+                    .SetValue(teleop, _link);
+                SetEndpoint(teleop, "10.0.0.1:9090");
+
+                teleop.StartTeleop(profile);
+                var first = DriveOf(teleop);
+                var press = new TeleopInput
+                {
+                    LeftStick = new Vector2(0f, 1f),
+                    LeftGrip = true,
+                    RightGrip = true,
+                    BothGrips = true,
+                    BothGripsPressed = true,
+                    DeltaTime = 0.1f
+                };
+                first.Tick(ref press, _link);
+                Assert.IsTrue(first.IsEmergencyStopActive);
+                _link.Clear();
+
+                teleop.StartTeleop(profile);
+                var second = DriveOf(teleop);
+                Assert.AreNotSame(first, second);
+                Assert.IsTrue(second.IsEmergencyStopActive, "The same endpoint keeps the latch");
+                Assert.AreEqual(0, CountEStop(false), "Restart on the same endpoint must not publish false");
+
+                SetEndpoint(teleop, "10.0.0.2:9090");
+                teleop.StartTeleop(profile);
+                var third = DriveOf(teleop);
+                Assert.IsFalse(third.IsEmergencyStopActive,
+                    "A different endpoint must not inherit the latch");
+                Assert.AreEqual(0, CountEStop(false),
+                    "Skipping the restore must not publish emergency_stop false");
+
+                var drive = new TeleopInput
+                {
+                    LeftStick = new Vector2(0f, 1f),
+                    LeftGrip = true,
+                    DeltaTime = 0.1f
+                };
+                third.Tick(ref drive, _link);
+                Assert.IsTrue(_link.Published.Exists(p =>
+                    p.topic == profile.Topics.CmdVel && p.msg is TwistMsg twist && twist.linear.x > 0f),
+                    "The new endpoint can drive without an explicit reset");
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(host);
+            }
+        }
+
+        [Test]
+        public void EndpointChange_DropsLiveLatchWithoutPublishingClear()
+        {
+            var profile = MakeOmniBotProfile();
+            profile.HasArm = false;
+            profile.ArmDof = 0;
+
+            var host = new GameObject("teleop-live-endpoint-test");
+            try
+            {
+                var teleop = host.AddComponent<TeleopController>();
+                typeof(TeleopController).GetField("_link", BindingFlags.Instance | BindingFlags.NonPublic)
+                    .SetValue(teleop, _link);
+                SetEndpoint(teleop, "10.0.0.1:9090");
+
+                teleop.StartTeleop(profile);
+                var first = DriveOf(teleop);
+                var press = new TeleopInput
+                {
+                    BothGrips = true,
+                    BothGripsPressed = true,
+                    DeltaTime = 0.1f
+                };
+                first.Tick(ref press, _link);
+                _link.Clear();
+
+                // Stop/start records the endpoint the latch belongs to.
+                teleop.StartTeleop(profile);
+                var live = DriveOf(teleop);
+                Assert.IsTrue(live.IsEmergencyStopActive);
+                _link.Clear();
+
+                SetEndpoint(teleop, "10.0.0.2:9090");
+                typeof(TeleopController).GetMethod(
+                        "ReleaseLatchIfEndpointChanged",
+                        BindingFlags.Instance | BindingFlags.NonPublic)
+                    .Invoke(teleop, null);
+
+                Assert.IsFalse(live.IsEmergencyStopActive,
+                    "The live scheme drops a latch that belongs to another endpoint");
+                Assert.AreEqual(0, CountEStop(false),
+                    "Dropping the latch must not publish emergency_stop false");
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(host);
+            }
+        }
+
+        void SetEndpoint(TeleopController teleop, string key)
+        {
+            typeof(TeleopController).GetField("_endpointKeyOverride", BindingFlags.Instance | BindingFlags.NonPublic)
+                .SetValue(teleop, key);
+        }
+
+        [Test]
         public void TeleopRestart_KeepsLatchUntilExplicitReset()
         {
             var profile = MakeOmniBotProfile();

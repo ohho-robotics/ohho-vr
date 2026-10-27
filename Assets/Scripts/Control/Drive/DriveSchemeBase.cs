@@ -229,6 +229,18 @@ namespace OmniBot.VR.Control.Drive
             IsPublishing = false;
         }
 
+        /// <summary>
+        /// Drop the local latch without publishing. Used when the active
+        /// connection is no longer the endpoint that latched, so this scheme
+        /// must not stay blocked and must not send emergency_stop false.
+        /// </summary>
+        public void DiscardEmergencyStopLatch()
+        {
+            EmergencyStopActive = false;
+            IsPublishing = false;
+            VibrateControllers(0f);
+        }
+
         // ── To override ──────────────────────────────────────────────────────────
 
         /// <summary>

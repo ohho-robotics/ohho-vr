@@ -1,3 +1,4 @@
+using System;
 using UnityEngine;
 using OmniBot.VR.Core;
 using OmniBot.VR.Input;
@@ -59,10 +60,19 @@ namespace OmniBot.VR.Control
 
         /// <summary>
         /// Latch copied off the drive scheme in <see cref="StopTeleop"/> so the
-        /// next <see cref="StartTeleop"/> can put it back. The replacement
-        /// scheme starts clear; the simulated robot does not.
+        /// next <see cref="StartTeleop"/> can put it back on the same endpoint.
+        /// A different connection does not inherit it. This is not keyed by
+        /// <see cref="RobotProfile.RobotId"/>, which is the hardware model id.
         /// </summary>
         private bool _emergencyStopLatched;
+
+        /// <summary>ip:port the latch was taken on. Empty when no ConnectionManager is loaded.</summary>
+        private string _emergencyStopEndpoint;
+
+        /// <summary>When set, replaces the ConnectionManager endpoint (edit-mode tests).</summary>
+        private string _endpointKeyOverride;
+
+        private ConnectionManager _connection;
 
         /// <summary>One-line drive control hint (for onboarding / HUD).</summary>
         public string DriveHint => _drive?.HudHint ?? "No drive on this robot";
@@ -87,6 +97,9 @@ namespace OmniBot.VR.Control
         private void Update()
         {
             if (!_teleopActive || !Link.IsConnected) return;
+
+            // A HUD reconnect to another ip:port must not keep this scheme blocked.
+            ReleaseLatchIfEndpointChanged();
 
             // ── Build the controller input snapshot ──────────────────────────────
             Vector2 leftStick = OVRInput.Get(OVRInput.Axis2D.PrimaryThumbstick, OVRInput.Controller.LTouch);
@@ -118,6 +131,7 @@ namespace OmniBot.VR.Control
             // ── Drive ────────────────────────────────────────────────────────────
             if (_drive != null)
                 _drive.Tick(ref input, Link);
+            RememberLatchEndpoint();
 
             // ── Manipulation (hand poses) ────────────────────────────────────────
             if (_manip != null && gestureDetector != null)
@@ -148,7 +162,15 @@ namespace OmniBot.VR.Control
             Profile = profile;
             _drive = ControlSchemeFactory.CreateDriveScheme(profile);
             if (_emergencyStopLatched && _drive is DriveSchemeBase drive)
-                drive.RestoreEmergencyStopLatch();
+            {
+                if (SameEndpoint(_emergencyStopEndpoint, CurrentEndpointKey()))
+                    drive.RestoreEmergencyStopLatch();
+                else
+                {
+                    _emergencyStopLatched = false;
+                    _emergencyStopEndpoint = null;
+                }
+            }
             _manip = ControlSchemeFactory.CreateManipulationScheme(profile, handWorkspaceOrigin);
 
             AdvertiseTopics(profile);
@@ -165,7 +187,22 @@ namespace OmniBot.VR.Control
         public void StopTeleop()
         {
             if (_drive is DriveSchemeBase drive)
-                _emergencyStopLatched = drive.IsEmergencyStopActive;
+            {
+                if (drive.IsEmergencyStopActive)
+                {
+                    // Keep the endpoint captured when the latch engaged. Reading
+                    // it only here would attach the latch to a connection the
+                    // operator already switched away from.
+                    if (!_emergencyStopLatched || _emergencyStopEndpoint == null)
+                        _emergencyStopEndpoint = CurrentEndpointKey();
+                    _emergencyStopLatched = true;
+                }
+                else
+                {
+                    _emergencyStopLatched = false;
+                    _emergencyStopEndpoint = null;
+                }
+            }
             if (!_teleopActive && _drive == null && _manip == null) return;
             _drive?.Stop(Link);
             _manip?.Stop(Link);
@@ -179,6 +216,44 @@ namespace OmniBot.VR.Control
 
         /// <summary>Whether a robot is currently being teleoperated.</summary>
         public bool IsTeleopActive => _teleopActive;
+
+        /// <summary>
+        /// ROSBridge endpoint the latch is scoped to. ConnectionManager ip:port,
+        /// or the edit-mode override. Not the hardware model id.
+        /// </summary>
+        private string CurrentEndpointKey()
+        {
+            if (_endpointKeyOverride != null) return _endpointKeyOverride;
+            if (_connection == null)
+                _connection = FindObjectOfType<ConnectionManager>();
+            if (_connection == null) return "";
+            return (_connection.CurrentIp ?? "") + ":" + _connection.CurrentPort;
+        }
+
+        private static bool SameEndpoint(string a, string b)
+            => string.Equals(a ?? "", b ?? "", StringComparison.Ordinal);
+
+        /// <summary>
+        /// The scheme is latched for a previous connection. Clear it locally
+        /// and do not publish emergency_stop false.
+        /// </summary>
+        private void ReleaseLatchIfEndpointChanged()
+        {
+            if (!(_drive is DriveSchemeBase drive) || !drive.IsEmergencyStopActive) return;
+            if (!_emergencyStopLatched || _emergencyStopEndpoint == null) return;
+            if (SameEndpoint(_emergencyStopEndpoint, CurrentEndpointKey())) return;
+            drive.DiscardEmergencyStopLatch();
+            _emergencyStopLatched = false;
+            _emergencyStopEndpoint = null;
+        }
+
+        private void RememberLatchEndpoint()
+        {
+            if (!(_drive is DriveSchemeBase drive) || !drive.IsEmergencyStopActive) return;
+            if (_emergencyStopLatched && _emergencyStopEndpoint != null) return;
+            _emergencyStopLatched = true;
+            _emergencyStopEndpoint = CurrentEndpointKey();
+        }
 
         // ── Input helpers ─────────────────────────────────────────────────────────
 

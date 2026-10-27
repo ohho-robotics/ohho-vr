@@ -10,8 +10,10 @@ on:
 
 # push to an open ohh-* PR also matches pull_request. One group per branch
 # cancels the stale run instead of starting a second Unity test and APK build.
+# Head repository is part of the key so two fork PRs that share a branch name
+# do not cancel each other. Pushes have no pull_request head and use this repo.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 permissions:
