@@ -373,7 +373,13 @@ namespace OmniBot.VR.Policy
             {
                 var events = new GameObject("EventSystem");
                 events.AddComponent<EventSystem>();
+                // Player Settings use the Input System package only.
+                // StandaloneInputModule reads UnityEngine.Input every frame and throws.
+#if ENABLE_INPUT_SYSTEM
+                events.AddComponent<UnityEngine.InputSystem.UI.InputSystemUIInputModule>();
+#elif ENABLE_LEGACY_INPUT_MANAGER
                 events.AddComponent<StandaloneInputModule>();
+#endif
             }
         }
 
