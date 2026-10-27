@@ -641,6 +641,10 @@ namespace OmniBot.VR.Tests
             public void Unsubscribe(string topic)
             {
             }
+
+            public void CallService(string service, string type, Action<bool, string> onResponse)
+            {
+            }
         }
 
         private sealed class ScriptedDetector : IAprilTagDetector

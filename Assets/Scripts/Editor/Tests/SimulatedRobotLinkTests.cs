@@ -2,6 +2,7 @@ using System;
 using Newtonsoft.Json.Linq;
 using NUnit.Framework;
 using OmniBot.VR.Control;
+using OmniBot.VR.Control.Safety;
 using OmniBot.VR.Core;
 using UnityEngine;
 
@@ -364,6 +365,85 @@ namespace OmniBot.VR.Tests
             link.CommandVelocity(0.2, 0, 0);
             link.Tick(SimulatedVectors.TickSeconds);
             Assert.AreEqual(0.02, link.Pose.X, 1e-9);
+        }
+
+        [Test]
+        public void Link_EstopReset_RefusesWhileAsserted_ThenClearsAnApiLatch()
+        {
+            _link.Publish(RobotConfig.TOPIC_EMERGENCY_STOP, new BoolMsg(true));
+            Assert.IsTrue(_link.EstopLatched);
+
+            bool refused = true;
+            string refusedValues = null;
+            _link.CallService(
+                OhhoSafetyContract.EstopResetService,
+                OhhoSafetyContract.EstopResetType,
+                (ok, values) =>
+                {
+                    refused = ok;
+                    refusedValues = values;
+                });
+            Assert.IsFalse(refused);
+            Assert.That(refusedValues, Does.Contain("stop still asserted"));
+            Assert.IsTrue(_link.EstopLatched);
+
+            _link.Publish(RobotConfig.TOPIC_EMERGENCY_STOP, new BoolMsg(false));
+            Assert.IsFalse(_link.EstopLatched);
+
+            _link.EmergencyStop();
+            Assert.IsTrue(_link.EstopLatched);
+
+            bool cleared = false;
+            string clearedValues = null;
+            _link.CallService(
+                OhhoSafetyContract.EstopResetService,
+                OhhoSafetyContract.EstopResetType,
+                (ok, values) =>
+                {
+                    cleared = ok;
+                    clearedValues = values;
+                });
+            Assert.IsTrue(cleared);
+            Assert.IsTrue(JObject.Parse(clearedValues).Value<bool>("success"));
+            Assert.IsFalse(_link.EstopLatched);
+
+            _link.EmergencyStop();
+            bool unknown = true;
+            _link.CallService("/ohho/not_a_service", "std_srvs/Trigger", (ok, _) => unknown = ok);
+            Assert.IsFalse(unknown);
+            Assert.IsTrue(_link.EstopLatched);
+
+            _link.Disconnect();
+            bool down = true;
+            _link.CallService(
+                OhhoSafetyContract.EstopResetService,
+                OhhoSafetyContract.EstopResetType,
+                (ok, _) => down = ok);
+            Assert.IsFalse(down);
+        }
+
+        [Test]
+        public void Host_ForwardsEstopResetWhileStopIsHeld()
+        {
+            var go = new GameObject("in-headset-sim-service");
+            try
+            {
+                var host = go.AddComponent<InHeadsetSimHost>();
+                host.Publish(RobotConfig.TOPIC_EMERGENCY_STOP, new BoolMsg(true));
+                Assert.IsTrue(host.Sim.EstopLatched);
+
+                bool ok = true;
+                host.CallService(
+                    OhhoSafetyContract.EstopResetService,
+                    OhhoSafetyContract.EstopResetType,
+                    (success, _) => ok = success);
+                Assert.IsFalse(ok);
+                Assert.IsTrue(host.Sim.EstopLatched);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(go);
+            }
         }
 
         [Test]
