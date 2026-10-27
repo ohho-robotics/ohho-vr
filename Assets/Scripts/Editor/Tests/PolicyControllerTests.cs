@@ -402,8 +402,7 @@ namespace OmniBot.VR.Tests
             RobotProfile profile = RobotProfileFactory.FromGarageRobot(OmniBot("omnibot"));
 
             Assert.IsNotNull(profile);
-            Assert.AreEqual("/arm/joint_commands", profile.Topics.ArmCommands);
-            Assert.AreEqual(RobotConfig.TOPIC_ARM_COMMANDS, profile.Topics.ArmCommands);
+            Assert.AreEqual("/arm/joint_commands/teleop", profile.Topics.ArmCommands);
             Assert.AreEqual("/control_mode", profile.Topics.ControlMode);
             Assert.AreEqual("/arm/cmd_mode", profile.Topics.ArmCmdMode);
             Assert.AreEqual("/policy/enable", profile.Topics.PolicyEnable);
