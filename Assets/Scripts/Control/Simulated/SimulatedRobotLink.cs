@@ -34,6 +34,17 @@ namespace OmniBot.VR.Control
             new Dictionary<string, List<Action<string>>>();
         readonly HashSet<string> _advertised = new HashSet<string>();
 
+        // OmniBot catalog names used when the profile leaves a topic blank.
+        const string DefaultCmdVel = "/cmd_vel/teleop";
+        const string DefaultControlMode = "/control_mode";
+        const string DefaultControlModeActive = "/control_mode/active";
+        const string DefaultArmCommands = "/arm/joint_commands";
+        const string DefaultArmEnable = "/arm/enable";
+        const string DefaultEstop = "/emergency_stop";
+        const string DefaultOdom = "/odom";
+        const string DefaultImu = "/imu/data";
+        const string DefaultJointStates = "/arm/joint_states";
+
         readonly string _cmdTopic;
         readonly string _odomTopic;
         readonly string _jointStateTopic;
@@ -42,6 +53,7 @@ namespace OmniBot.VR.Control
         readonly string _estopTopic;
         readonly string _imuTopic;
         readonly string _controlModeTopic;
+        readonly string _controlModeActiveTopic;
         readonly double _maxLin;
         readonly double _maxAng;
         readonly double _jointRate;
@@ -86,14 +98,15 @@ namespace OmniBot.VR.Control
             _jointRate = SimulatedSafetyCaps.HardMaxJointRateRadPerSec;
 
             var topics = profile?.Topics;
-            _cmdTopic = Or(topics?.CmdVel, RobotConfig.TOPIC_CMD_VEL);
-            _odomTopic = Or(topics?.Odom, RobotConfig.TOPIC_ODOM);
-            _jointStateTopic = Or(topics?.JointStates, RobotConfig.TOPIC_ARM_STATES);
-            _armCmdTopic = Or(topics?.ArmCommands, RobotConfig.TOPIC_ARM_COMMANDS);
-            _armEnableTopic = Or(topics?.ArmEnable, RobotConfig.TOPIC_ARM_ENABLE);
-            _estopTopic = Or(topics?.EmergencyStop, RobotConfig.TOPIC_EMERGENCY_STOP);
-            _imuTopic = Or(topics?.Imu, RobotConfig.TOPIC_IMU);
-            _controlModeTopic = Or(topics?.ControlMode, RobotConfig.TOPIC_CONTROL_MODE);
+            _cmdTopic = Or(topics?.CmdVel, DefaultCmdVel);
+            _odomTopic = Or(topics?.Odom, DefaultOdom);
+            _jointStateTopic = Or(topics?.JointStates, DefaultJointStates);
+            _armCmdTopic = Or(topics?.ArmCommands, DefaultArmCommands);
+            _armEnableTopic = Or(topics?.ArmEnable, DefaultArmEnable);
+            _estopTopic = Or(topics?.EmergencyStop, DefaultEstop);
+            _imuTopic = Or(topics?.Imu, DefaultImu);
+            _controlModeTopic = Or(topics?.ControlMode, DefaultControlMode);
+            _controlModeActiveTopic = Or(topics?.ControlModeActive, DefaultControlModeActive);
             ConfigureJoints(profile);
         }
 
@@ -268,8 +281,8 @@ namespace OmniBot.VR.Control
                 LastControlMode = text.data ?? "";
                 string json = WithKind(text);
                 Notify(topic, json);
-                if (!string.Equals(topic, RobotConfig.TOPIC_CONTROL_MODE_ACTIVE, StringComparison.Ordinal))
-                    Notify(RobotConfig.TOPIC_CONTROL_MODE_ACTIVE, json);
+                if (!string.Equals(topic, _controlModeActiveTopic, StringComparison.Ordinal))
+                    Notify(_controlModeActiveTopic, json);
                 return;
             }
 

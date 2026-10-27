@@ -202,7 +202,7 @@ namespace OmniBot.VR.Tests
 
             _link.Published.Clear();
             NavStickHandover.Apply(mode, _session, _link, "/control_mode", true, 0.02f);
-            Assert.IsTrue(_link.Published.Exists(p => p.topic == RobotConfig.TOPIC_MISSION_CANCEL));
+            Assert.IsTrue(_link.Published.Exists(p => p.topic == "/mission/cancel"));
             Assert.IsTrue(_link.Published.Exists(p => p.topic == "/control_mode" && p.json.Contains("teleop")));
             Assert.IsFalse(_session.ModeIsNav2);
         }

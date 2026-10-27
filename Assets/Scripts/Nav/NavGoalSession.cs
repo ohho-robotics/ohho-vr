@@ -111,8 +111,8 @@ namespace OmniBot.VR.Nav
             StatusText = "sending";
             EtaSeconds = null;
             DistanceRemaining = null;
-            transport.Advertise(RobotConfig.TOPIC_CONTROL_MODE, "std_msgs/String");
-            transport.Publish(RobotConfig.TOPIC_CONTROL_MODE, new StringMsg("nav2"));
+            transport.Advertise("/control_mode", "std_msgs/String");
+            transport.Publish("/control_mode", new StringMsg("nav2"));
             transport.SendRaw(NavMessages.SendGoalJson(_goalId, wp));
             Changed?.Invoke();
             return true;
@@ -144,8 +144,8 @@ namespace OmniBot.VR.Nav
             if (string.Equals(mode, "teleop", StringComparison.OrdinalIgnoreCase)
                 && (GoalActive || ModeIsNav2))
                 CancelForOverride(null);
-            transport.Advertise(RobotConfig.TOPIC_CONTROL_MODE, "std_msgs/String");
-            transport.Publish(RobotConfig.TOPIC_CONTROL_MODE, new StringMsg(mode));
+            transport.Advertise("/control_mode", "std_msgs/String");
+            transport.Publish("/control_mode", new StringMsg(mode));
             NoteModePublished(mode);
         }
 
@@ -309,15 +309,15 @@ namespace OmniBot.VR.Nav
             var msg = new StringMsg("cancel");
             if (link != null && link.IsConnected)
             {
-                link.Advertise(RobotConfig.TOPIC_MISSION_CANCEL, "std_msgs/String");
-                link.Publish(RobotConfig.TOPIC_MISSION_CANCEL, msg);
+                link.Advertise("/mission/cancel", "std_msgs/String");
+                link.Publish("/mission/cancel", msg);
                 return;
             }
             var transport = Effective;
             if (transport != null && transport.IsConnected)
             {
-                transport.Advertise(RobotConfig.TOPIC_MISSION_CANCEL, "std_msgs/String");
-                transport.Publish(RobotConfig.TOPIC_MISSION_CANCEL, msg);
+                transport.Advertise("/mission/cancel", "std_msgs/String");
+                transport.Publish("/mission/cancel", msg);
             }
         }
 

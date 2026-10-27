@@ -70,15 +70,15 @@ namespace OmniBot.VR.Nav
             _ros.OnProtocolMessage += OnProtocol;
 
             var transport = RosbridgeNavTransport.Instance;
-            transport.Advertise(RobotConfig.TOPIC_CONTROL_MODE, "std_msgs/String");
-            transport.Advertise(RobotConfig.TOPIC_MISSION_CANCEL, "std_msgs/String");
-            transport.Subscribe(RobotConfig.TOPIC_GLOBAL_PLAN, "nav_msgs/Path",
+            transport.Advertise("/control_mode", "std_msgs/String");
+            transport.Advertise("/mission/cancel", "std_msgs/String");
+            transport.Subscribe("/plan", "nav_msgs/Path",
                 json => NavGoalSession.Active.HandlePlan(json));
-            transport.Subscribe(RobotConfig.TOPIC_MAP, "nav_msgs/OccupancyGrid",
+            transport.Subscribe("/map", "nav_msgs/OccupancyGrid",
                 json => NavGoalSession.Active.HandleMap(json));
-            transport.Subscribe(RobotConfig.TOPIC_WAYPOINTS, "std_msgs/String",
+            transport.Subscribe("/ohho/waypoints", "std_msgs/String",
                 json => NavGoalSession.Active.HandleWaypointMessage(json));
-            transport.Subscribe(RobotConfig.TOPIC_CONTROL_MODE_ACTIVE, "std_msgs/String",
+            transport.Subscribe("/control_mode/active", "std_msgs/String",
                 json => NavGoalSession.Active.HandleModeEcho(json));
 
             if (ConnectionManager.Instance != null)
