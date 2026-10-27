@@ -8,7 +8,9 @@ using UnityEngine.XR.Management;
 namespace OmniBot.VR.PlayModeTests
 {
     /// <summary>
-    /// Play-mode coverage for login stub → garage → picker → teleop → e-stop.
+    /// Play-mode coverage for login stub → garage → picker → teleop → latched
+    /// e-stop. Grip release does not clear the stop; the harness re-arms with
+    /// left X, then holds the deadman before expecting motion again.
     /// The fixture runs in an empty scene (<see cref="EmptySceneSetup"/>) and
     /// talks to FakeRobotLink, which is compiled into Assembly-CSharp from the
     /// staged Runtime folder. This assembly cannot reference Assembly-CSharp,

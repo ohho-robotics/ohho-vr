@@ -17,7 +17,9 @@ namespace OmniBot.VR.PlayMode
     /// <summary>
     /// Drives the real headset flow against <see cref="FakeRobotLink"/>:
     /// login stub, console, garage, add-robot picker, teleop, both-grips e-stop.
-    /// Supabase, rosbridge, and the Quest runtime are not contacted.
+    /// The stop stays latched until an explicit left-X re-arm. A grip release
+    /// does not clear it, and the base stays still until one grip (the deadman)
+    /// is held again. Supabase, rosbridge, and the Quest runtime are not contacted.
     /// </summary>
     public static class OperatorFlowHarness
     {
@@ -100,10 +102,16 @@ namespace OmniBot.VR.PlayMode
                 result.EStopTrueCount = link.CountBool(EmergencyStop, true);
                 result.NonZeroWhileHeld = link.CountNonZeroTwist(CmdVel);
 
+                // Releasing the grips must not clear the latch. Left X is the re-arm,
+                // and it is ignored while both grips are still held. Sticks stay
+                // centered so the clear itself does not command motion.
                 Tick(drive, link, Stick(0f, 0f), grips: false, press: false, release: true);
+                Tick(drive, link, Stick(0f, 0f), leftGrip: false, rightGrip: false, press: false, release: false, reset: true);
                 result.EStopFalseCount = link.CountBool(EmergencyStop, false);
 
-                Tick(drive, link, Stick(1f, 1f, 1f), grips: false, press: false, release: false);
+                // Deadman (left grip, not turbo) plus full sticks. Motion stays
+                // zero until the latch has been cleared.
+                Tick(drive, link, Stick(1f, 1f, 1f), leftGrip: true, rightGrip: false, press: false, release: false);
                 var resume = link.LastTwist(CmdVel);
                 if (resume != null)
                 {
@@ -129,6 +137,7 @@ namespace OmniBot.VR.PlayMode
                 result.TeleopInactiveAfterStop = !teleop.IsTeleopActive;
                 log.Append("estopTrue=").Append(result.EStopTrueCount)
                     .Append(" nonZeroWhileHeld=").Append(result.NonZeroWhileHeld)
+                    .Append(" estopFalse=").Append(result.EStopFalseCount)
                     .Append(" resumeX=").Append(result.ResumeLinearX);
             }
             catch (System.Exception ex)
@@ -323,7 +332,7 @@ namespace OmniBot.VR.PlayMode
             Tick(drive, link, left, grips, grips, press, release);
         }
 
-        static void Tick(IDriveScheme drive, FakeRobotLink link, Vector2 left, bool leftGrip, bool rightGrip, bool press, bool release)
+        static void Tick(IDriveScheme drive, FakeRobotLink link, Vector2 left, bool leftGrip, bool rightGrip, bool press, bool release, bool reset = false)
         {
             var input = new TeleopInput
             {
@@ -334,6 +343,7 @@ namespace OmniBot.VR.PlayMode
                 BothGrips = leftGrip && rightGrip,
                 BothGripsPressed = press,
                 BothGripsReleased = release,
+                ResetEmergencyStop = reset,
                 DeltaTime = Step,
             };
             drive.Tick(ref input, link);
