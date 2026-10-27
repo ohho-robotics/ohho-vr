@@ -102,15 +102,22 @@ namespace OmniBot.VR.PlayMode
                 result.EStopTrueCount = link.CountBool(EmergencyStop, true);
                 result.NonZeroWhileHeld = link.CountNonZeroTwist(CmdVel);
 
-                // Releasing the grips must not clear the latch. Left X is the re-arm,
-                // and it is ignored while both grips are still held. Sticks stay
-                // centered so the clear itself does not command motion.
+                // Grip release must not publish emergency_stop false.
                 Tick(drive, link, Stick(0f, 0f), grips: false, press: false, release: true);
+                result.EStopFalseBeforeReset = link.CountBool(EmergencyStop, false);
+
+                // Deadman held and sticks deflected, still before the reset.
+                // A false published on release would let this tick drive.
+                Tick(drive, link, Stick(1f, 1f, 1f), leftGrip: true, rightGrip: false, press: false, release: false);
+                result.NonZeroBeforeReset = link.CountNonZeroTwist(CmdVel);
+
+                // Left X is the re-arm. Sticks stay centered so the clear itself
+                // does not command motion.
                 Tick(drive, link, Stick(0f, 0f), leftGrip: false, rightGrip: false, press: false, release: false, reset: true);
                 result.EStopFalseCount = link.CountBool(EmergencyStop, false);
 
-                // Deadman (left grip, not turbo) plus full sticks. Motion stays
-                // zero until the latch has been cleared.
+                // Deadman (left grip, not turbo) plus full sticks. Motion is
+                // allowed only after the explicit reset.
                 Tick(drive, link, Stick(1f, 1f, 1f), leftGrip: true, rightGrip: false, press: false, release: false);
                 var resume = link.LastTwist(CmdVel);
                 if (resume != null)
@@ -137,6 +144,8 @@ namespace OmniBot.VR.PlayMode
                 result.TeleopInactiveAfterStop = !teleop.IsTeleopActive;
                 log.Append("estopTrue=").Append(result.EStopTrueCount)
                     .Append(" nonZeroWhileHeld=").Append(result.NonZeroWhileHeld)
+                    .Append(" estopFalseBeforeReset=").Append(result.EStopFalseBeforeReset)
+                    .Append(" nonZeroBeforeReset=").Append(result.NonZeroBeforeReset)
                     .Append(" estopFalse=").Append(result.EStopFalseCount)
                     .Append(" resumeX=").Append(result.ResumeLinearX);
             }
@@ -473,6 +482,8 @@ namespace OmniBot.VR.PlayMode
         public int DeadZoneAddedNonZero = -1;
         public int EStopTrueCount = -1;
         public int NonZeroWhileHeld = -1;
+        public int EStopFalseBeforeReset = -1;
+        public int NonZeroBeforeReset = -1;
         public int EStopFalseCount = -1;
         public float ResumeLinearX = float.NaN;
         public float ResumeLinearY = float.NaN;

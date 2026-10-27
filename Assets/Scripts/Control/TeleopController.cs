@@ -57,6 +57,13 @@ namespace OmniBot.VR.Control
         private IManipulationScheme _manip;
         private bool _teleopActive;
 
+        /// <summary>
+        /// Latch copied off the drive scheme in <see cref="StopTeleop"/> so the
+        /// next <see cref="StartTeleop"/> can put it back. The replacement
+        /// scheme starts clear; the simulated robot does not.
+        /// </summary>
+        private bool _emergencyStopLatched;
+
         /// <summary>One-line drive control hint (for onboarding / HUD).</summary>
         public string DriveHint => _drive?.HudHint ?? "No drive on this robot";
         /// <summary>One-line manipulation control hint (for onboarding / HUD).</summary>
@@ -140,6 +147,8 @@ namespace OmniBot.VR.Control
 
             Profile = profile;
             _drive = ControlSchemeFactory.CreateDriveScheme(profile);
+            if (_emergencyStopLatched && _drive is DriveSchemeBase drive)
+                drive.RestoreEmergencyStopLatch();
             _manip = ControlSchemeFactory.CreateManipulationScheme(profile, handWorkspaceOrigin);
 
             AdvertiseTopics(profile);
@@ -155,6 +164,8 @@ namespace OmniBot.VR.Control
         /// <summary>Stop teleoperation: zero velocity, disarm arm, drop the schemes.</summary>
         public void StopTeleop()
         {
+            if (_drive is DriveSchemeBase drive)
+                _emergencyStopLatched = drive.IsEmergencyStopActive;
             if (!_teleopActive && _drive == null && _manip == null) return;
             _drive?.Stop(Link);
             _manip?.Stop(Link);

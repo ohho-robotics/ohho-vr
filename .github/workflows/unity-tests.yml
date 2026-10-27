@@ -8,6 +8,12 @@ on:
   pull_request:
   workflow_dispatch:
 
+# push to an open ohh-* PR also matches pull_request. One group per branch
+# cancels the stale run instead of starting a second Unity test and APK build.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   # unity-test-runner posts a test-results check on the commit.

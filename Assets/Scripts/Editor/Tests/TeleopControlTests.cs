@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using NUnit.Framework;
 using UnityEngine;
 using OmniBot.VR.Control;
@@ -513,6 +514,138 @@ namespace OmniBot.VR.Tests
             var mode = _link.Published.Find(p => p.topic == _profile.Topics.ControlMode);
             Assert.IsNotNull(mode.msg, "Stop must publish idle control mode");
             Assert.AreEqual("nav2", ((StringMsg)mode.msg).data);
+        }
+
+        [Test]
+        public void ClampLinearSpeed_FullDiagonal_CapsVectorMagnitude()
+        {
+            var input = new TeleopInput
+            {
+                LeftStick = new Vector2(1f, 1f),
+                LeftGrip = true,
+                RightGrip = false,
+                DeltaTime = 0.1f
+            };
+            _scheme.Tick(ref input, _link);
+
+            var twist = (TwistMsg)_link.Published.Find(p => p.topic == _profile.Topics.CmdVel).msg;
+            float mag = Mathf.Sqrt(
+                twist.linear.x * twist.linear.x +
+                twist.linear.y * twist.linear.y +
+                twist.linear.z * twist.linear.z);
+            Assert.AreEqual(_profile.MaxLinVel, mag, 0.0001f, "Diagonal stick speed is the cap, not the cap on each axis");
+            Assert.Greater(twist.linear.x, 0f);
+            Assert.Greater(twist.linear.y, 0f);
+            Assert.Less(twist.linear.x, _profile.MaxLinVel);
+        }
+
+        [Test]
+        public void StopAndConfigure_KeepLatch_AndDoNotPublishClear()
+        {
+            _scheme.TriggerEmergencyStop(_link);
+            _link.Clear();
+
+            _scheme.Stop(_link);
+            Assert.IsTrue(_scheme.IsEmergencyStopActive, "Stop leaves the latch set");
+            Assert.IsFalse(PublishedEStop(false), "Stop must not publish emergency_stop false");
+
+            _scheme.Configure(_profile);
+            Assert.IsTrue(_scheme.IsEmergencyStopActive, "Configure must not drop the latch");
+            Assert.IsFalse(PublishedEStop(false));
+
+            var replacement = new MecanumDriveScheme();
+            replacement.Configure(_profile);
+            Assert.IsFalse(replacement.IsEmergencyStopActive, "A new scheme starts clear");
+            replacement.RestoreEmergencyStopLatch();
+            Assert.IsTrue(replacement.IsEmergencyStopActive);
+            Assert.IsFalse(PublishedEStop(false), "Restoring the latch must not publish a clear");
+
+            var reset = new TeleopInput
+            {
+                ResetEmergencyStop = true,
+                DeltaTime = 0.1f
+            };
+            replacement.Tick(ref reset, _link);
+            Assert.IsFalse(replacement.IsEmergencyStopActive);
+            Assert.AreEqual(1, CountEStop(false), "Only the explicit reset publishes false");
+        }
+
+        [Test]
+        public void TeleopRestart_KeepsLatchUntilExplicitReset()
+        {
+            var profile = MakeOmniBotProfile();
+            profile.HasArm = false;
+            profile.ArmDof = 0;
+
+            var host = new GameObject("teleop-latch-test");
+            try
+            {
+                var teleop = host.AddComponent<TeleopController>();
+                typeof(TeleopController).GetField("_link", BindingFlags.Instance | BindingFlags.NonPublic)
+                    .SetValue(teleop, _link);
+
+                teleop.StartTeleop(profile);
+                var first = DriveOf(teleop);
+                var press = new TeleopInput
+                {
+                    LeftStick = new Vector2(0f, 1f),
+                    LeftGrip = true,
+                    RightGrip = true,
+                    BothGrips = true,
+                    BothGripsPressed = true,
+                    DeltaTime = 0.1f
+                };
+                first.Tick(ref press, _link);
+                Assert.IsTrue(first.IsEmergencyStopActive);
+                _link.Clear();
+
+                teleop.StartTeleop(profile);
+                var second = DriveOf(teleop);
+                Assert.AreNotSame(first, second);
+                Assert.IsTrue(second.IsEmergencyStopActive, "Restart keeps the latch the robot still holds");
+                Assert.IsFalse(PublishedEStop(false), "Restart must not publish emergency_stop false");
+
+                var blocked = new TeleopInput
+                {
+                    LeftStick = new Vector2(0f, 1f),
+                    LeftGrip = true,
+                    RightGrip = false,
+                    DeltaTime = 0.1f
+                };
+                second.Tick(ref blocked, _link);
+                Assert.IsFalse(_link.Published.Exists(p =>
+                    p.topic == profile.Topics.CmdVel && p.msg is TwistMsg twist && twist.linear.x > 0f));
+
+                var reset = new TeleopInput { ResetEmergencyStop = true, DeltaTime = 0.1f };
+                second.Tick(ref reset, _link);
+                Assert.IsFalse(second.IsEmergencyStopActive);
+                Assert.AreEqual(1, CountEStop(false));
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(host);
+            }
+        }
+
+        DriveSchemeBase DriveOf(TeleopController teleop)
+        {
+            var drive = typeof(TeleopController).GetField("_drive", BindingFlags.Instance | BindingFlags.NonPublic)
+                .GetValue(teleop) as DriveSchemeBase;
+            Assert.IsNotNull(drive);
+            return drive;
+        }
+
+        bool PublishedEStop(bool value) => CountEStop(value) > 0;
+
+        int CountEStop(bool value)
+        {
+            int n = 0;
+            foreach (var (topic, msg) in _link.Published)
+            {
+                if (topic == _profile.Topics.EmergencyStop && msg is BoolMsg flag && flag.data == value)
+                    n++;
+            }
+            return n;
         }
     }
 }

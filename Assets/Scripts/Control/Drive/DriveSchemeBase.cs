@@ -98,7 +98,9 @@ namespace OmniBot.VR.Control.Drive
             Profile = profile;
             PublishInterval = 1f / PublishHz;
             PublishTimer = 0f;
-            EmergencyStopActive = false;
+            // Do not clear EmergencyStopActive. Reconfigure must not drop a latch
+            // the robot still holds. A replacement scheme starts clear; TeleopController
+            // copies the latch onto it and only an explicit reset publishes false.
             PrevBothGrips = false;
             IsPublishing = false;
             NoInputTimer = 0f;
@@ -200,6 +202,10 @@ namespace OmniBot.VR.Control.Drive
 
         public void Stop(IRobotLink link)
         {
+            // Headset haptics stop with teleop. The latch stays set, and this
+            // does not publish emergency_stop false — only ClearEmergencyStop
+            // does that, on an explicit reset.
+            VibrateControllers(0f);
             if (!IsConfigured || Profile == null) return;
             if (link != null && link.IsConnected)
             {
@@ -210,6 +216,17 @@ namespace OmniBot.VR.Control.Drive
             IsPublishing = false;
             NoInputTimer = 0f;
             NoInputModeTimer = 0f;
+        }
+
+        /// <summary>
+        /// Re-apply a latch that was active on the scheme this one replaces.
+        /// Does not publish. The robot already has the stop; the next explicit
+        /// reset is what publishes false.
+        /// </summary>
+        public void RestoreEmergencyStopLatch()
+        {
+            EmergencyStopActive = true;
+            IsPublishing = false;
         }
 
         // ── To override ──────────────────────────────────────────────────────────
@@ -325,14 +342,17 @@ namespace OmniBot.VR.Control.Drive
         protected static TwistMsg ZeroTwist()
             => new TwistMsg(new Vector3Msg(0f, 0f, 0f), new Vector3Msg(0f, 0f, 0f));
 
-        /// <summary>Clamp the linear vector so its components cannot exceed <paramref name="limit"/> m/s.</summary>
+        /// <summary>Clamp the linear vector so its magnitude cannot exceed <paramref name="limit"/> m/s.</summary>
         protected static void ClampLinearSpeed(TwistMsg twist, float limit)
         {
             if (twist?.linear == null) return;
             float cap = Mathf.Abs(limit);
-            twist.linear.x = Mathf.Clamp(twist.linear.x, -cap, cap);
-            twist.linear.y = Mathf.Clamp(twist.linear.y, -cap, cap);
-            twist.linear.z = Mathf.Clamp(twist.linear.z, -cap, cap);
+            var v = new Vector3(twist.linear.x, twist.linear.y, twist.linear.z);
+            if (v.sqrMagnitude <= cap * cap) return;
+            v = v.normalized * cap;
+            twist.linear.x = v.x;
+            twist.linear.y = v.y;
+            twist.linear.z = v.z;
         }
     }
 }
