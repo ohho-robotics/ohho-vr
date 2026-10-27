@@ -175,6 +175,13 @@ namespace OmniBot.VR.Control
             _link = link ?? ResolveLink();
         }
 
+        /// <summary>
+        /// True when commands go out through <see cref="RosBridgeLink"/>.
+        /// An assigned transport such as the play-mode fake link is false, so a
+        /// session must not also open a rosbridge socket.
+        /// </summary>
+        public bool PublishesViaRosBridge => (_link ?? ResolveLink()) is RosBridgeLink;
+
         // ── Input helpers ─────────────────────────────────────────────────────────
 
         private HandPose BuildHandPose(OVRHand hand)

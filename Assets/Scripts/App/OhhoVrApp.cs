@@ -314,7 +314,11 @@ namespace OmniBot.VR.App
             else
             {
                 teleopController.SetLink(null);
-                ConnectionManager.Instance.ConnectEndpoint(endpoint);
+                // The headset scene leaves linkProvider empty, so this is RosBridgeLink
+                // and the endpoint is dialed. A stand-in transport already carries
+                // teleop and must not also open a socket.
+                if (teleopController.PublishesViaRosBridge)
+                    ConnectionManager.Instance.ConnectEndpoint(endpoint);
             }
 
             teleopController.StartTeleop(_pendingProfile);
@@ -354,9 +358,10 @@ namespace OmniBot.VR.App
                 var parent = garagePanel != null ? garagePanel.transform.parent : transform;
                 var go = new GameObject("Session Page", typeof(RectTransform));
                 go.transform.SetParent(parent, false);
-                if (garagePanel != null)
+                // Headset garage pages are UI rects. A plain object (the play-mode
+                // harness) has no RectTransform; reading one throws MissingComponentException.
+                if (garagePanel != null && garagePanel.TryGetComponent<RectTransform>(out var src))
                 {
-                    var src = garagePanel.GetComponent<RectTransform>();
                     var dst = (RectTransform)go.transform;
                     dst.anchorMin = src.anchorMin;
                     dst.anchorMax = src.anchorMax;
