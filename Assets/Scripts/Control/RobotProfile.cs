@@ -41,8 +41,20 @@ namespace OmniBot.VR.Control
         public bool Holonomic;
         public int BaseDof;
         public string[] BaseActionLabels;
-        public float MaxLinVel;         // m/s
+        public float MaxLinVel;         // m/s, forward / vertical
+        public float MaxLatVel;         // m/s, lateral. 0 when the base cannot strafe
         public float MaxAngVel;         // rad/s
+
+        /// <summary>Caps copied from the descriptor or the catalog before calibration. Calibration cannot exceed these.</summary>
+        public float HardMaxLinVel;
+        public float HardMaxLatVel;
+        public float HardMaxAngVel;
+        public float HardMaxAccelLin;   // m/s^2. 0 = no slew limit (catalog path)
+        public float HardMaxAccelYaw;   // rad/s^2. 0 = no slew limit
+        public float HardMaxJointStep;  // rad per command. 0 = use the 0.15 ceiling
+        public JointSpec[] HardJoints;
+        /// <summary>True when speed and topics came from a RobotDescriptor. Those speeds stay inside the OmniBot ceilings.</summary>
+        public bool CapsFromDescriptor;
 
         // ── Manipulator ───────────────────────────────────────────────────────
         public bool HasArm;
@@ -100,6 +112,9 @@ namespace OmniBot.VR.Control
         /// </summary>
         public string ServeBaseUrl;
 
+        /// <summary>package:// or http URL from the descriptor. Empty on the catalog path.</summary>
+        public string UrdfUrl;
+
         public int TotalDof => ArmDof + BaseDof;
     }
 
@@ -111,22 +126,28 @@ namespace OmniBot.VR.Control
     /// </summary>
     public class RobotTopics
     {
-        // Publish (teleop → robot)
-        public string CmdVel;           // base velocity (Twist)
-        public string ControlMode;      // cmd_vel_mux mode string
+        // Publish (teleop → robot). Command topics come from the descriptor when connected.
+        public string CmdVel;           // base velocity (Twist) — descriptor topics.cmd
+        public string ControlMode;      // cmd_vel_mux mode string (not in the descriptor; catalog only)
         public string ArmCommands;      // arm joint positions (JointState) — headset IK
         public string ArmEnable;        // arm enable bool
-        public string EmergencyStop;    // e-stop bool
+        public string EmergencyStop;    // e-stop bool — descriptor topics.estop
         public string IkTargetPose;     // Cartesian EE target (PoseStamped) — robot IK (MoveIt Servo)
+        public string RecordStart;      // dataset episode start (catalog; the descriptor does not name it)
+        public string RecordStop;
 
         // Subscribe (robot → teleop)
-        public string Odom;
+        public string Odom;             // descriptor topics.state
         public string Imu;
         public string JointStates;
+        public string ControlModeActive;
+        public string ArmModeActive;    // catalog only; the descriptor does not name it
+        public string Heartbeat;        // descriptor topics.heartbeat
+        public string Telemetry;        // descriptor topics.telemetry
         public List<string> Images = new List<string>();
 
         // Policy panel (OHH-229). Empty skips that publish or subscribe.
-        // Names live here so the panel does not add RobotConfig.TOPIC_* constants.
+        // Telemetry and ControlModeActive are declared above.
         public string ArmCmdMode;          // std_msgs/String — /arm/cmd_mode ("policy")
         public string PolicyEnable;        // std_msgs/Bool — /policy/enable
         public string PolicyTask;          // std_msgs/String — /policy/task
@@ -134,8 +155,6 @@ namespace OmniBot.VR.Control
         public string PolicyModels;        // std_msgs/String — latched model list
         public string PolicyCmdVel;        // geometry_msgs/Twist — /cmd_vel/vla
         public string AiStatus;            // std_msgs/String — /ai/status
-        public string Telemetry;           // std_msgs/String — /ohho/telemetry
-        public string ControlModeActive;   // std_msgs/String — /control_mode/active
 
         // Optional perception topics for the SLAM map panel. Blank fields fall
         // back to the OmniBot names (/map, /scan, Nav2 costmaps). OHH-228.

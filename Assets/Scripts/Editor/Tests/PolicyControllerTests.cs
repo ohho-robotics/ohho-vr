@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using NUnit.Framework;
 using OmniBot.VR.Control;
-using OmniBot.VR.Core;
 using OmniBot.VR.Core.Platform;
 using OmniBot.VR.Policy;
 
@@ -403,7 +402,6 @@ namespace OmniBot.VR.Tests
 
             Assert.IsNotNull(profile);
             Assert.AreEqual("/arm/joint_commands/teleop", profile.Topics.ArmCommands);
-            Assert.AreEqual(RobotConfig.TOPIC_ARM_COMMANDS, profile.Topics.ArmCommands);
             Assert.AreEqual("/control_mode", profile.Topics.ControlMode);
             Assert.AreEqual("/arm/cmd_mode", profile.Topics.ArmCmdMode);
             Assert.AreEqual("/policy/enable", profile.Topics.PolicyEnable);
