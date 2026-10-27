@@ -129,6 +129,28 @@ namespace OmniBot.VR.Tests
         }
 
         [Test]
+        public void DriveStop_Real_ZerosTwistWithoutNav2()
+        {
+            var scheme = ControlSchemeFactory.CreateDriveScheme(DriveProfile(RobotDeployment.Real));
+            var input = new TeleopInput { LeftStick = new UnityEngine.Vector2(0f, 1f), DeltaTime = 0.05f };
+            scheme.Tick(ref input, _link);
+            _link.Published.Clear();
+            scheme.Stop(_link);
+            Assert.IsTrue(_link.Published.Exists(p => p.topic == "/cmd_vel/teleop"));
+            Assert.IsFalse(_link.Published.Exists(p => p.topic == "/control_mode" && p.json.Contains("nav2")));
+        }
+
+        [Test]
+        public void DriveStop_Sim_PublishesNav2()
+        {
+            var scheme = ControlSchemeFactory.CreateDriveScheme(DriveProfile(RobotDeployment.Sim));
+            var input = new TeleopInput { LeftStick = new UnityEngine.Vector2(0f, 1f), DeltaTime = 0.05f };
+            scheme.Tick(ref input, _link);
+            scheme.Stop(_link);
+            Assert.IsTrue(_link.Published.Exists(p => p.topic == "/control_mode" && p.json.Contains("\"nav2\"")));
+        }
+
+        [Test]
         public void Machine_StickDuringNav2_CancelsOnce()
         {
             var mode = new ControlModeMachine();
@@ -418,6 +440,20 @@ waypoints:
         {
             var profile = RobotProfileFactory.FromGarageRobot(Garage("simulated", "real"));
             Assert.AreEqual(RobotDeployment.Real, profile.DeploymentKind);
+        }
+
+        private static RobotProfile DriveProfile(string deployment)
+        {
+            return new RobotProfile
+            {
+                RobotId = "test",
+                Name = "Test",
+                Drive = DriveKind.Mecanum,
+                DeploymentKind = deployment,
+                MaxLinVel = 0.5f,
+                MaxAngVel = 1f,
+                Topics = new RobotTopics { CmdVel = "/cmd_vel/teleop", ControlMode = "/control_mode" },
+            };
         }
 
         private static GarageRobot Garage(string status, string kind)

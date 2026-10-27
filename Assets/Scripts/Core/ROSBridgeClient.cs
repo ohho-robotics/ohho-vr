@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using NativeWebSocket;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using OmniBot.VR.Telemetry;
 
 namespace OmniBot.VR.Core

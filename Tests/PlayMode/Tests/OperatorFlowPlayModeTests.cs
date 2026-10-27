@@ -76,7 +76,9 @@ namespace OmniBot.VR.PlayModeTests
             Assert.AreEqual(0f, Field<float>(result, "StopLinearX"), 0.0001f, detail);
             Assert.AreEqual(0f, Field<float>(result, "StopLinearY"), 0.0001f, detail);
             Assert.AreEqual(0f, Field<float>(result, "StopAngularZ"), 0.0001f, detail);
-            Assert.IsTrue(Field<bool>(result, "StopPublishedNav2"), detail);
+            // Fixture status is "active" with no config.kind, so the robot is real.
+            // Stopping teleop must not hand /control_mode to nav2.
+            Assert.IsFalse(Field<bool>(result, "StopPublishedNav2"), detail);
             Assert.IsTrue(Field<bool>(result, "TeleopInactiveAfterStop"), detail);
         }
 
