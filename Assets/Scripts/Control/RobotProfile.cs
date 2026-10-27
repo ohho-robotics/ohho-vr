@@ -134,8 +134,16 @@ namespace OmniBot.VR.Control
         public string Imu;
         public string JointStates;
         public string ControlModeActive;
+        public string ArmModeActive;    // catalog only; the descriptor does not name it
         public string Heartbeat;        // descriptor topics.heartbeat
         public string Telemetry;        // descriptor topics.telemetry
         public List<string> Images = new List<string>();
+
+        // Optional perception topics for the SLAM map panel. Blank fields fall
+        // back to the OmniBot names (/map, /scan, Nav2 costmaps). OHH-228.
+        public string Map;
+        public string Scan;
+        public string GlobalCostmap;
+        public string LocalCostmap;
     }
 }

@@ -1,6 +1,6 @@
 # Multi-Robot VR Teleoperation — Architecture & Build Plan
 
-> Status: **Design note, not a ship list.** This file describes the intended multi-robot teleop stack. It is not a claim that every phase below is finished in this repository. Video in the headset client is MJPEG. WebRTC signaling is roadmap (`Assets/Scripts/Video/WebRtcVideoSource.cs` does not complete the handshake, and `com.unity.webrtc` is not a package dependency). The robot ROS workspace is not in this repo.
+> Status: **Design note, not a ship list.** This file describes the intended multi-robot teleop stack. It is not a claim that every phase below is finished in this repository. Video in the headset client prefers WebRTC (`com.unity.webrtc` 3.0.0 against ohho_webrtc) and falls back to MJPEG. Quest glass-to-glass measurement is still a human check. The robot ROS workspace is not in this repo.
 > Target headset: **Meta Quest 3 / 3S** (mixed reality, passthrough)
 > Scope: extend `vr_app/` from a single hardcoded OmniBot controller into a
 > **catalog-driven, any-robot** mixed-reality teleoperation app whose robot list,
@@ -150,7 +150,7 @@ the website agree on *which robots exist* and *how each one is controlled*.
 | Base drive | `Input/BaseController.cs` | Thumbsticks → `/cmd_vel/teleop`. **Mecanum only today.** |
 | Arm IK | `Input/ArmIKSolver.cs` | CCD, pure C#, 20 Hz, 50 iters, 1 mm tol, 6 joints clamped. **SO-101 geometry hardcoded.** |
 | Hand control | `Input/HandTrackingArmController.cs`, `Input/GestureDetector.cs` | Right-hand pose → IK target, pinch → gripper. |
-| UI | `UI/HUDManager.cs`, `UI/{Connection,Telemetry,Control,Recording}Panel.cs`, `UI/CameraFeedViewer.cs` | Floating panels; MJPEG camera feed. |
+| UI | `UI/HUDManager.cs`, `UI/{Connection,Telemetry,Control,Recording}Panel.cs`, `UI/CameraFeedViewer.cs` | Floating panels. The teleop camera shows WebRTC or MJPEG. |
 | Recording | `Recording/EpisodeManager.cs`, `Recording/DatasetRecorder.cs` | 30 Hz JSONL, export to a robot-side HTTP bridge on port 8765 (not in this repo). |
 | Constants | `Core/RobotConfig.cs` | **Single-robot constants — the thing this plan generalizes.** |
 
@@ -234,7 +234,7 @@ fallback for offline.
 | Concern | Choice | Notes |
 |---|---|---|
 | Control + telemetry | rosbridge_suite over NativeWebSocket (present) | Universal ROS 2 contract; topics from `RobotProfile.rosTopics`. |
-| Live video | MJPEG via `web_video_server` on the robot (not in this repo). WebRTC is roadmap. | `com.unity.webrtc` is not in `Packages/manifest.json`. |
+| Live video | WebRTC receive when ohho_webrtc answers; MJPEG via `web_video_server` otherwise. | `com.unity.webrtc` 3.0.0. ICE servers come from the welcome session record. |
 | Non-ROS robots | per-robot **bridge node** on the robot side | Matches the platform's "any robot, any transport" stance; VR app stays ROS-only. |
 | JSON | Newtonsoft (present) | rosbridge v2 protocol. |
 
@@ -295,7 +295,7 @@ driven by pinch strength.
    → compute hand pose RELATIVE to that origin
 3. Scale + clamp into the arm's reachable sphere   (reach from RobotProfile.joints)
 4. SOLVE IK  → joint angles, each clamped to JointSpec.min/max
-5. Stream  /arm/joint_commands  @ 20 Hz   (names + limits from RobotProfile)
+5. Stream  /arm/joint_commands/teleop  @ 20 Hz   (names + limits from RobotProfile)
 6. pinch → gripper joint (RobotProfile.joints last entry)
 ```
 
@@ -328,7 +328,7 @@ Variants selected from `RobotConfig.capabilities` / `armDof`:
 1. Selection → **OmniBot Pro** → `RobotProfile { drive: "mecanum", holonomic: true, armDof: 6, joints: SO101_JOINTS, rosTopics.cmdVel: "/cmd_vel/teleop", … }`.
 2. Factory → `MecanumDriveScheme` + `HandIK6DOF` (analytic SO-101 solver).
 3. **Base:** left stick → vx/vy strafe, right stick X → yaw → `/cmd_vel/teleop` @ 20 Hz.
-4. **Arm:** right-hand pose → analytic IK → 6 joints → `/arm/joint_commands` @ 20 Hz; pinch → `arm_gripper`. Left-hand thumbs-up toggles arm enable; both grips = e-stop.
+4. **Arm:** right-hand pose → analytic IK → 6 joints → `/arm/joint_commands/teleop` @ 20 Hz; pinch → `arm_gripper`. Left-hand thumbs-up toggles arm enable; both grips = e-stop. `arm_cmd_mux` forwards that topic only in teleop when e-stop is clear. A later `teleop_safety` node will sit on this topic before the mux.
 5. All in passthrough: a translucent twin of the SO-101 overlays the real table so the operator previews motion before the real arm catches up.
 
 ---
@@ -450,7 +450,7 @@ and reskinned. It proves the whole spine without breaking the existing teleop.
 3. **Platform contract:** static `vr/manifest.json` + direct Supabase (the site is a
    static export). Never duplicate website data in C#. _(Decided / implemented.)_
 4. **Transport:** ROSBridge as the universal contract; non-ROS robots get a bridge node on their side.
-5. **Video:** ship MJPEG (present), upgrade to WebRTC in Phase 4.
+5. **Video:** WebRTC client in the headset, MJPEG fallback. Glass-to-glass on Quest is still a human measurement.
 
 ---
 

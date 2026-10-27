@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using OmniBot.VR.Core;
 using OmniBot.VR.Core.Platform;
 using OmniBot.VR.Descriptor;
+using OmniBot.VR.Mapping;
 
 namespace OmniBot.VR.Control
 {
@@ -262,6 +263,7 @@ namespace OmniBot.VR.Control
                 CmdVel        = baseDof > 0 ? "/cmd_vel/teleop" : "",
                 ControlMode   = "/control_mode",
                 ControlModeActive = "/control_mode/active",
+                ArmModeActive = "/arm/cmd_mode/active",
                 ArmCommands   = hasArm ? "/arm/joint_commands" : "",
                 ArmEnable     = hasArm ? "/arm/enable" : "",
                 EmergencyStop = "/emergency_stop",
@@ -271,6 +273,10 @@ namespace OmniBot.VR.Control
                 Odom          = baseDof > 0 ? "/odom" : "",
                 Imu           = "/imu/data",
                 JointStates   = jointStates,
+                Map           = MapTopics.DefaultMap,
+                Scan          = MapTopics.DefaultScan,
+                GlobalCostmap = MapTopics.DefaultGlobalCostmap,
+                LocalCostmap  = MapTopics.DefaultLocalCostmap,
             };
             // Image topics by category (mirrors deriveSensors image list)
             if (category == "mobile-manipulator")
@@ -299,7 +305,7 @@ namespace OmniBot.VR.Control
                     p.ArmLinkLengths = (float[])So101LinkLengths.Clone();
                     p.IsDualArm = false;
                     // OmniBot publishes arm commands + enables on the arm_ topics.
-                    p.Topics.ArmCommands = "/arm/joint_commands";
+                    p.Topics.ArmCommands = "/arm/joint_commands/teleop";
                     p.Topics.ArmEnable = "/arm/enable";
                     p.Topics.JointStates = "/arm/joint_states";
                     break;
@@ -529,6 +535,7 @@ namespace OmniBot.VR.Control
                 target.ControlModeActive = catalog.ControlModeActive;
             }
 
+            target.ArmModeActive = catalog.ArmModeActive;
             if (!armOnly || string.IsNullOrEmpty(target.ArmCommands))
                 target.ArmCommands = catalog.ArmCommands;
             target.ArmEnable = catalog.ArmEnable;
@@ -538,6 +545,10 @@ namespace OmniBot.VR.Control
                 target.JointStates = catalog.JointStates;
             target.RecordStart = catalog.RecordStart;
             target.RecordStop = catalog.RecordStop;
+            target.Map = catalog.Map;
+            target.Scan = catalog.Scan;
+            target.GlobalCostmap = catalog.GlobalCostmap;
+            target.LocalCostmap = catalog.LocalCostmap;
         }
 
         private static string[] CloneFields(string[] fields)

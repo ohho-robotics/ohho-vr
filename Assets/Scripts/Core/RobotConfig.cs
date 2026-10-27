@@ -7,6 +7,10 @@ namespace OmniBot.VR.Core
     /// </summary>
     public static class RobotConfig
     {
+        // Topic names live on the catalog profile and the latched descriptor.
+        // OmniBot's catalog arm command is /arm/joint_commands/teleop (main's
+        // mux input). RobotConfig no longer declares TOPIC_* constants.
+
         // ── Physical limits ──────────────────────────────────────────────────
         /// <summary>Maximum base linear velocity in m/s.</summary>
         public const float MAX_LINEAR_VEL  = 0.2f;
@@ -17,7 +21,7 @@ namespace OmniBot.VR.Core
         /// <summary>Rate at which /cmd_vel/teleop is published (Hz).</summary>
         public const float CMD_VEL_PUBLISH_HZ = 20f;
 
-        /// <summary>Rate at which /arm/joint_commands is published (Hz).</summary>
+        /// <summary>Rate at which /arm/joint_commands/teleop is published (Hz).</summary>
         public const float ARM_PUBLISH_HZ = 20f;
 
         // ── Arm joint names (must match omnibot_arm and smolvla_node) ────────

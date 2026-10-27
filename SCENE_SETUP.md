@@ -108,7 +108,7 @@ One persistent GameObject holding the platform services (each is a singleton):
 | Column | Contents |
 |---|---|
 | Left | Robot name, connection (IP/port/Connect/Disconnect/status dot), telemetry (pose, velocity, arm, mode), control hints, **< Garage** |
-| Center | Camera feed (`CameraFeedController` → MJPEG; WebRTC is roadmap), camera name, **Next Camera** |
+| Center | Camera feed (`CameraFeedController` → WebRTC when signaling answers, else MJPEG), camera name and transport, **Next Camera** |
 | Right | Dataset recording (Start / Stop & Save / Discard, live status), **Export to Robot** (POSTs JSONL to the VR bridge at `:8765`) |
 
 ---
@@ -125,7 +125,7 @@ One persistent GameObject holding the platform services (each is a singleton):
    hands it to `TeleopController`. The teleop page opens.
    - **Base:** left stick strafe (vx/vy), right stick X yaw, right grip turbo,
      both grips e-stop.
-   - **Arm:** right-hand pose → IK → `/arm/joint_commands` @ 20 Hz; pinch →
+   - **Arm:** right-hand pose → IK → `/arm/joint_commands/teleop` @ 20 Hz; pinch →
      gripper; left-hand thumbs-up (hold 0.5 s) toggles arm enable.
    - All topics, joint names and limits come from the profile (OmniBot = SO-101
      6-DOF + mecanum, identical to the old hardcoded constants).
