@@ -84,11 +84,14 @@ namespace OmniBot.VR.Control.Manip
             if (_publishTimer < _publishInterval) return false;
             _publishTimer -= _publishInterval;
 
+            // Pinch moves the gripper only while tracking is good. The first
+            // clutched sample stays put. The step is the tighter of the arm
+            // enable cap and the descriptor hard joint step.
             if (!_suppressMotionThisPublish && _frame.TrackingGood)
             {
                 float goal = Mathf.Lerp(_gripperOpen, _gripperClosed, Mathf.Clamp01(rightHand.PinchStrength));
                 var current = new[] { _gripper };
-                JointRateLimiter.StepTowards(current, new[] { goal }, _maxDelta,
+                JointRateLimiter.StepTowards(current, new[] { goal }, StepCap(),
                     new[] { _gripperClosed }, new[] { _gripperOpen });
                 _gripper = current[0];
             }
@@ -113,6 +116,14 @@ namespace OmniBot.VR.Control.Manip
             var signal = enabled ? _gate.Flow.RequestEnable() : _gate.Flow.Disarm();
             ArmEnablePublish.Apply(signal, _profile, link);
             RefreshStatus();
+        }
+
+        private float StepCap()
+        {
+            float cap = _maxDelta;
+            float hard = SafetyCaps.JointStepLimit(_profile);
+            if (hard > 0f && hard < cap) return hard;
+            return cap;
         }
 
         private void RefreshStatus() => _status = _gate.Flow.Describe(_frame.TrackingGood, _jointNames[0]);

@@ -178,7 +178,7 @@ namespace OmniBot.VR.Input
                 (string[])RobotConfig.ARM_JOINT_NAMES.Clone(),
                 newAngles);
 
-            ROSBridgeClient.Instance.Publish(RobotConfig.TOPIC_ARM_COMMANDS, msg);
+            ROSBridgeClient.Instance.Publish("/arm/joint_commands", msg);
         }
 
         // ── Public API ───────────────────────────────────────────────────────
@@ -225,7 +225,7 @@ namespace OmniBot.VR.Input
             _armEnabled = false;
             Debug.Log("[HandTrackingArmController] Arm disabled");
             if (ROSBridgeClient.Instance != null && ROSBridgeClient.Instance.IsConnected)
-                ROSBridgeClient.Instance.Publish(RobotConfig.TOPIC_ARM_ENABLE, new BoolMsg(false));
+                ROSBridgeClient.Instance.Publish("/arm/enable", new BoolMsg(false));
         }
 
         /// <summary>Whether the arm controller is currently active.</summary>

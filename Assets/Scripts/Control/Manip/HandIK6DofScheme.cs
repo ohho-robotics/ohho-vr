@@ -183,6 +183,14 @@ namespace OmniBot.VR.Control.Manip
             RefreshStatus();
         }
 
+        private float StepCap()
+        {
+            float cap = _maxDelta;
+            float hard = SafetyCaps.JointStepLimit(_profile);
+            if (hard > 0f && hard < cap) return hard;
+            return cap;
+        }
+
         private void ApplyJog(float dt)
         {
             if (_currentAngles.Length == 0) return;
@@ -192,7 +200,7 @@ namespace OmniBot.VR.Control.Manip
             var target = (float[])_currentAngles.Clone();
             int index = Mathf.Clamp(_jogJoint, 0, target.Length - 1);
             target[index] = _currentAngles[index] + JointJog.DeltaRad(_frame.JogAxis, dt);
-            JointRateLimiter.StepTowards(_currentAngles, target, _maxDelta, _jointMin, _jointMax);
+            JointRateLimiter.StepTowards(_currentAngles, target, StepCap(), _jointMin, _jointMax);
             RefreshStatus();
         }
 
@@ -211,7 +219,7 @@ namespace OmniBot.VR.Control.Manip
             if (targetAngles.Length > 0)
                 targetAngles[targetAngles.Length - 1] = PinchToGripper(rightHand.PinchStrength);
 
-            JointRateLimiter.StepTowards(_currentAngles, targetAngles, _maxDelta, _jointMin, _jointMax);
+            JointRateLimiter.StepTowards(_currentAngles, targetAngles, StepCap(), _jointMin, _jointMax);
         }
 
         private bool PublishRobotIk(HandPose rightHand, float dt, IRobotLink link)
