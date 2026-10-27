@@ -146,6 +146,12 @@ namespace OmniBot.VR.Control.Session
             kind = SessionKind.Sim;
             target = SessionTarget.LocalDesktop;
             bool kindSet = TryParseKind(kindText, out kind);
+            // "offline" is not sim or real; TryFromRegistryRow turns it into the
+            // in-headset demo. Any other non-empty kind that does not parse is a
+            // bad row — do not file it as sim just because the target parsed.
+            bool offlineKind = string.Equals(kindText?.Trim(), "offline", StringComparison.OrdinalIgnoreCase);
+            if (!kindSet && !offlineKind && !string.IsNullOrWhiteSpace(kindText))
+                return false;
             bool targetSet = TryParseTarget(targetText, out target);
             if (!kindSet && !targetSet) return false;
             if (!targetSet)

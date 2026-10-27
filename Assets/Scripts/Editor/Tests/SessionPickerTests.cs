@@ -402,5 +402,30 @@ namespace OmniBot.VR.Tests
             Assert.AreEqual("announcement", endpoint.Source);
             Assert.AreEqual(1, endpoint.VideoUrls.Count);
         }
+
+        [Test]
+        public void UnknownKind_IsNotFiledAsSim()
+        {
+            const string json = "[{\"id\":\"x\",\"robot_id\":\"omnibot\",\"kind\":\"physical\",\"target\":\"local\",\"rosbridge_url\":\"ws://10.0.0.8:9090\"}]";
+            var rows = RobotSessionRows.Parse(json, out var error);
+            Assert.IsNull(error);
+            Assert.AreEqual(0, rows.Count);
+
+            var announced = new Dictionary<string, string>
+            {
+                { "kind", "physical" },
+                { "target", "local" },
+                { "rosbridge", "ws://10.0.0.8:9090" },
+            };
+            Assert.IsFalse(RobotSessionRows.TryFromAnnouncement(announced, "omnibot", out _, out var announceError));
+            StringAssert.Contains("kind", announceError);
+
+            const string offline = "[{\"id\":\"off\",\"robot_id\":\"omnibot\",\"kind\":\"offline\",\"target\":\"local\"}]";
+            var offlineRows = RobotSessionRows.Parse(offline, out var offlineError);
+            Assert.IsNull(offlineError);
+            Assert.AreEqual(1, offlineRows.Count);
+            Assert.IsTrue(offlineRows[0].Offline);
+            Assert.AreEqual(SessionKind.Sim, offlineRows[0].Kind);
+        }
     }
 }

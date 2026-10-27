@@ -118,9 +118,10 @@ unity -batchmode -nographics -projectPath <clone> -runTests -testPlatform editmo
    Add a robot on ohho-robotics.com and open the garage again. **Open Website**
    launches the site in the Quest browser.
 6. **Pick a robot** → choose **Simulate** or **Drive real**.
-   - **Simulate → Local desktop** uses a registry session if one is listed, or the
-     IP already filled in (default `192.168.1.101`, port `9090`) and opens Teleop.
-     From the garage that is three clicks: the robot, Simulate, Local desktop.
+   - **Simulate → Local desktop** uses the IP and port already filled in
+     (default `192.168.1.101`, port `9090`) and opens Teleop. Registry sessions
+     appear as extra buttons below it. From the garage that is three clicks:
+     the robot, Simulate, Local desktop.
    - **Cloud** starts a session when an orchestrator is configured, or attaches to
      a `wss://` rosbridge URL.
    - **In-headset** is an offline demo. It does not open a socket.

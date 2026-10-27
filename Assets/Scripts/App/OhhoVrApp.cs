@@ -109,10 +109,23 @@ namespace OmniBot.VR.App
                 auth.RestoreSession(restored => { if (restored) ShowConsole(); else ShowLogin(); });
         }
 
-        private void OnAuthChanged(bool signedIn)
+        private async void OnAuthChanged(bool signedIn)
         {
-            if (signedIn) ShowConsole();
-            else ShowLogin();
+            if (signedIn)
+            {
+                ShowConsole();
+                return;
+            }
+
+            // Sign-out must stop the robot that is still linked. Hiding the
+            // panels alone leaves teleop publishing.
+            if (teleopController != null) teleopController.StopTeleop();
+            if (ConnectionManager.HasInstance && ROSBridgeClient.HasInstance &&
+                ConnectionManager.Instance.IsConnected)
+                await ConnectionManager.Instance.DisconnectAsync();
+            if (this == null) return;
+            if (auth != null && auth.IsSignedIn) return;
+            ShowLogin();
         }
 
         // ── Panel routing ─────────────────────────────────────────────────────
@@ -230,9 +243,10 @@ namespace OmniBot.VR.App
             _pendingUserRobotId = robot.UserRobot != null ? robot.UserRobot.Id : null;
 
             RobotEndpoint saved = null;
-            bool hasChoice = LastRobotStore.TryLoadChoice(profile.RobotId, out saved);
-            if (!hasChoice && !string.IsNullOrEmpty(_pendingUserRobotId))
-                hasChoice = LastRobotStore.TryLoadChoice(_pendingUserRobotId, out saved);
+            bool hasChoice = !string.IsNullOrEmpty(_pendingUserRobotId) &&
+                             LastRobotStore.TryLoadChoice(_pendingUserRobotId, out saved);
+            if (!hasChoice)
+                hasChoice = LastRobotStore.TryLoadChoice(profile.RobotId, out saved);
 
             // Quick-resume of a sim target skips the picker. A real robot still
             // stops on the safety notice — resume must not skip that.
@@ -242,20 +256,24 @@ namespace OmniBot.VR.App
                 return;
             }
 
-            string ip = EndpointAddresses.DefaultIp;
-            int port = EndpointAddresses.RosbridgePort;
+            // Simulate and Drive real keep separate addresses. A saved real host
+            // must not prefill Simulate, and the last socket is not a sim target.
+            string simIp = EndpointAddresses.DefaultIp;
+            int simPort = EndpointAddresses.RosbridgePort;
+            string realIp = EndpointAddresses.DefaultIp;
+            int realPort = EndpointAddresses.RosbridgePort;
             if (hasChoice && saved != null && !string.IsNullOrEmpty(saved.Host))
             {
-                ip = saved.Host;
-                if (saved.Port > 0) port = saved.Port;
-            }
-            else
-            {
-                var conn = ConnectionManager.Instance;
-                if (conn != null)
+                int savedPort = saved.Port > 0 ? saved.Port : EndpointAddresses.RosbridgePort;
+                if (saved.Kind == SessionKind.Real)
                 {
-                    ip = conn.CurrentIp;
-                    port = conn.CurrentPort;
+                    realIp = saved.Host;
+                    realPort = savedPort;
+                }
+                else
+                {
+                    simIp = saved.Host;
+                    simPort = savedPort;
                 }
             }
 
@@ -264,10 +282,11 @@ namespace OmniBot.VR.App
                 : PickerStep.Mode;
             EnsurePicker();
             ShowSessionPicker();
-            _picker.Open(profile.RobotId, _pendingUserRobotId, robot.DisplayName, ip, port, step);
+            _picker.Open(profile.RobotId, _pendingUserRobotId, robot.DisplayName,
+                simIp, simPort, realIp, realPort, step);
         }
 
-        private void OnSessionConfirmed(SessionLaunch plan)
+        private async void OnSessionConfirmed(SessionLaunch plan)
         {
             if (plan == null || !plan.ReadyToDrive || plan.Endpoint == null || _pendingProfile == null) return;
             if (teleopController == null) return;
@@ -293,6 +312,14 @@ namespace OmniBot.VR.App
                 return;
             }
 
+            // Zero the robot on the link that is still installed, then wait until
+            // that socket is closed before pointing teleop at the new target.
+            teleopController.StopTeleop();
+            if (ConnectionManager.HasInstance && ROSBridgeClient.HasInstance &&
+                ConnectionManager.Instance.IsConnected)
+                await ConnectionManager.Instance.DisconnectAsync();
+            if (this == null || teleopController == null || _pendingProfile == null) return;
+
             ActiveSession.Set(endpoint);
             string host = endpoint.Offline ? "in-headset" : endpoint.Host;
             int port = endpoint.Port > 0 ? endpoint.Port : EndpointAddresses.RosbridgePort;
@@ -305,8 +332,6 @@ namespace OmniBot.VR.App
 
             if (endpoint.Offline)
             {
-                var conn = ConnectionManager.Instance;
-                if (conn != null && conn.IsConnected) conn.Disconnect();
                 if (_offlineLink == null) _offlineLink = new OfflineKinematicLink();
                 _offlineLink.IsConnected = true;
                 teleopController.SetLink(_offlineLink);

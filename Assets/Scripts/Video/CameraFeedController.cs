@@ -109,6 +109,8 @@ namespace OmniBot.VR.Video
                 ? new List<string>(endpoint.VideoUrls)
                 : new List<string>();
             _offline = endpoint != null && endpoint.Offline;
+            if (endpoint != null && !string.IsNullOrEmpty(endpoint.Host))
+                _robotIp = endpoint.Host;
             _currentIndex = 0;
             HasVideoFrame = false;
             StartCurrentCamera();

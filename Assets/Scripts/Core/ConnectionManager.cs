@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using UnityEngine;
 
 namespace OmniBot.VR.Core
@@ -13,6 +14,8 @@ namespace OmniBot.VR.Core
     {
         // ── Singleton ────────────────────────────────────────────────────────
         private static ConnectionManager _instance;
+        public static bool HasInstance => _instance != null;
+
         public static ConnectionManager Instance
         {
             get
@@ -142,11 +145,19 @@ namespace OmniBot.VR.Core
         /// <summary>Unsubscribes from all topics, then disconnects cleanly.</summary>
         public void Disconnect()
         {
+            _ = DisconnectAsync();
+        }
+
+        /// <summary>
+        /// Unsubscribes, then closes the socket. Callers that are about to open
+        /// another session must await this so the previous socket is gone first.
+        /// </summary>
+        public async Task DisconnectAsync()
+        {
+            var client = ROSBridgeClient.Instance;
             foreach (var topic in SubscribeTopics.Keys)
-            {
-                ROSBridgeClient.Instance.Unsubscribe(topic);
-            }
-            ROSBridgeClient.Instance.Disconnect();
+                client.Unsubscribe(topic);
+            await client.DisconnectAsync();
         }
 
         /// <summary>Saves auto-connect preference to PlayerPrefs.</summary>
