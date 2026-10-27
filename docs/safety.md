@@ -14,7 +14,7 @@ Test the hardware control with the wheels unloaded before the first drive. Keep 
 
 On commit `4ebc555`, both grip buttons together are the only software stop in the drive loop.
 
-[`DriveSchemeBase.HandleEmergencyStop`](../Assets/Scripts/Control/Drive/DriveSchemeBase.cs) and [`BaseController.Update`](../Assets/Scripts/Input/BaseController.cs):
+[`DriveSchemeBase.HandleEmergencyStop`](../Assets/Scripts/Control/Drive/DriveSchemeBase.cs) and [`BaseController.Update`](../Archive/legacy-control/BaseController.cs):
 
 - On the rising edge, publish `std_msgs/Bool` `true` on `/emergency_stop` and stop publishing new `/cmd_vel/teleop` messages.
 - They do not publish a zero `Twist` when the stop turns on. The last non-zero command is left as the last command the peer received.
