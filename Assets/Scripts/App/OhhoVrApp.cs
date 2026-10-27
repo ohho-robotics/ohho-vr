@@ -2,8 +2,8 @@ using UnityEngine;
 using OmniBot.VR.Core;
 using OmniBot.VR.Core.Platform;
 using OmniBot.VR.Control;
-using OmniBot.VR.Descriptor;
 using OmniBot.VR.UI;
+using LatchedRobotDescriptor = OmniBot.VR.Descriptor.RobotDescriptor;
 using OmniBot.VR.UI.Garage;
 
 namespace OmniBot.VR.App
@@ -50,7 +50,7 @@ namespace OmniBot.VR.App
         [SerializeField] private OnboardingController onboarding;
 
         private GarageRobot _activeRobot;
-        private RobotDescriptor _descriptor;
+        private LatchedRobotDescriptor _descriptor;
 
         private void Awake()
         {
@@ -98,7 +98,7 @@ namespace OmniBot.VR.App
             }
         }
 
-        private void OnRobotDescriptor(RobotDescriptor descriptor)
+        private void OnRobotDescriptor(LatchedRobotDescriptor descriptor)
         {
             _descriptor = descriptor;
             if (_activeRobot != null && teleopController != null && teleopController.IsTeleopActive)
