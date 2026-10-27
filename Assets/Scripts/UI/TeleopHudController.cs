@@ -98,6 +98,14 @@ namespace OmniBot.VR.UI
         private static readonly Color RecordingColor = new Color(1f, 0.2f, 0.2f);
         private static readonly Color IdleDotColor = new Color(0.45f, 0.45f, 0.5f);
 
+        // OmniBot catalog names used only when the active profile leaves a field blank.
+        // A descriptor-built profile replaces these whenever it names the topic.
+        private const string CatalogOdom = "/odom";
+        private const string CatalogImu = "/imu/data";
+        private const string CatalogJointStates = "/arm/joint_states";
+        private const string CatalogControlModeActive = "/control_mode/active";
+        private const string CatalogArmModeActive = "/arm/cmd_mode/active";
+
         // ── Unity lifecycle ───────────────────────────────────────────────────
 
         private void Awake()
@@ -240,8 +248,8 @@ namespace OmniBot.VR.UI
                 Sub(ros, TelemetryTopics.Telemetry, TelemetryTopics.StringType, OnTelemetry);
                 Sub(ros, TelemetryTopics.SafetyState, TelemetryTopics.StringType, OnSafety);
                 Sub(ros, TelemetryTopics.HeartbeatEcho, TelemetryTopics.StringType, OnHeartbeatEcho);
-                Sub(ros, RobotConfig.TOPIC_CONTROL_MODE_ACTIVE, "std_msgs/String", OnBaseMode);
-                Sub(ros, RobotConfig.TOPIC_ARM_MODE_ACTIVE, "std_msgs/String", OnArmMode);
+                Sub(ros, CatalogControlModeActive, "std_msgs/String", OnBaseMode);
+                Sub(ros, CatalogArmModeActive, "std_msgs/String", OnArmMode);
                 _coreSubscribed = true;
             }
 
@@ -256,15 +264,16 @@ namespace OmniBot.VR.UI
         {
             DropProfileSubs(ros);
             RobotTopics topics = profile != null ? profile.Topics : null;
-            string odom = topics != null && !string.IsNullOrEmpty(topics.Odom) ? topics.Odom : RobotConfig.TOPIC_ODOM;
-            string imu = topics != null && !string.IsNullOrEmpty(topics.Imu) ? topics.Imu : RobotConfig.TOPIC_IMU;
-            string joints = topics != null && !string.IsNullOrEmpty(topics.JointStates) ? topics.JointStates : RobotConfig.TOPIC_ARM_STATES;
+            string odom = topics != null && !string.IsNullOrEmpty(topics.Odom) ? topics.Odom : CatalogOdom;
+            string imu = topics != null && !string.IsNullOrEmpty(topics.Imu) ? topics.Imu : CatalogImu;
+            string joints = topics != null && !string.IsNullOrEmpty(topics.JointStates) ? topics.JointStates : CatalogJointStates;
             SubProfile(ros, odom, "nav_msgs/Odometry", OnOdom);
             SubProfile(ros, imu, "sensor_msgs/Imu", OnImu);
             SubProfile(ros, joints, "sensor_msgs/JointState", OnJoints);
             if (topics == null) return;
             SubProfileDistinct(ros, topics.Telemetry, TelemetryTopics.Telemetry, TelemetryTopics.StringType, OnTelemetry);
-            SubProfileDistinct(ros, topics.ControlModeActive, RobotConfig.TOPIC_CONTROL_MODE_ACTIVE, "std_msgs/String", OnBaseMode);
+            SubProfileDistinct(ros, topics.ControlModeActive, CatalogControlModeActive, "std_msgs/String", OnBaseMode);
+            SubProfileDistinct(ros, topics.ArmModeActive, CatalogArmModeActive, "std_msgs/String", OnArmMode);
         }
 
         private void Sub(ROSBridgeClient ros, string topic, string type, System.Action<string> callback)
@@ -308,8 +317,8 @@ namespace OmniBot.VR.UI
             Unsub(ros, TelemetryTopics.Telemetry, OnTelemetry);
             Unsub(ros, TelemetryTopics.SafetyState, OnSafety);
             Unsub(ros, TelemetryTopics.HeartbeatEcho, OnHeartbeatEcho);
-            Unsub(ros, RobotConfig.TOPIC_CONTROL_MODE_ACTIVE, OnBaseMode);
-            Unsub(ros, RobotConfig.TOPIC_ARM_MODE_ACTIVE, OnArmMode);
+            Unsub(ros, CatalogControlModeActive, OnBaseMode);
+            Unsub(ros, CatalogArmModeActive, OnArmMode);
             _coreSubscribed = false;
         }
 

@@ -254,6 +254,7 @@ namespace OmniBot.VR.Control
                 CmdVel        = baseDof > 0 ? "/cmd_vel/teleop" : "",
                 ControlMode   = "/control_mode",
                 ControlModeActive = "/control_mode/active",
+                ArmModeActive = "/arm/cmd_mode/active",
                 ArmCommands   = hasArm ? "/arm/joint_commands" : "",
                 ArmEnable     = hasArm ? "/arm/enable" : "",
                 EmergencyStop = "/emergency_stop",
@@ -515,6 +516,7 @@ namespace OmniBot.VR.Control
         {
             target.ControlMode = catalog.ControlMode;
             target.ControlModeActive = catalog.ControlModeActive;
+            target.ArmModeActive = catalog.ArmModeActive;
             target.ArmCommands = catalog.ArmCommands;
             target.ArmEnable = catalog.ArmEnable;
             target.IkTargetPose = catalog.IkTargetPose;

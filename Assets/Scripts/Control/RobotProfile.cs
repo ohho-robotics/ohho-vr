@@ -128,6 +128,7 @@ namespace OmniBot.VR.Control
         public string Imu;
         public string JointStates;
         public string ControlModeActive;
+        public string ArmModeActive;    // catalog only; the descriptor does not name it
         public string Heartbeat;        // descriptor topics.heartbeat
         public string Telemetry;        // descriptor topics.telemetry
         public List<string> Images = new List<string>();

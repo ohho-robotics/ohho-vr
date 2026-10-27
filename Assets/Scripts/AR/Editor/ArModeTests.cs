@@ -184,7 +184,7 @@ namespace OmniBot.VR.Tests
             source.Attach(link, Profile("/custom/joints", "/custom/odom"));
             Assert.IsTrue(link.Subscriptions.ContainsKey("/custom/joints"));
             Assert.IsTrue(link.Subscriptions.ContainsKey("/custom/odom"));
-            Assert.IsFalse(link.Subscriptions.ContainsKey(RobotConfig.TOPIC_ARM_STATES));
+            Assert.IsFalse(link.Subscriptions.ContainsKey("/arm/joint_states"));
             Assert.AreEqual(0, link.AdvertiseCalls);
             Assert.AreEqual(0, link.PublishCalls);
         }
