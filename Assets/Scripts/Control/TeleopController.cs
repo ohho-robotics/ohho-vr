@@ -1,7 +1,9 @@
+using System;
 using UnityEngine;
 using OmniBot.VR.Comfort;
 using OmniBot.VR.Core;
 using OmniBot.VR.Input;
+using OmniBot.VR.UI;
 using OmniBot.VR.Video;
 using OmniBot.VR.Recording;
 using OmniBot.VR.Control.Drive;
@@ -19,8 +21,8 @@ namespace OmniBot.VR.Control
     /// poses → manipulation, publishing to the robot over the
     /// <see cref="IRobotLink"/>.
     ///
-    /// Replaces the legacy <c>Input/BaseController.cs</c> +
-    /// <c>Input/HandTrackingArmController.cs</c> as the single teleop GameObject.
+    /// Replaces the archived BaseController and HandTrackingArmController
+    /// (Archive/legacy-control) as the single teleop GameObject.
     /// Those MonoBehaviours were hardcoded to OmniBot; this one is agnostic — the
     /// profile decides what gets driven and how.
     /// </summary>
@@ -40,8 +42,13 @@ namespace OmniBot.VR.Control
         [Header("Phase 4 — video + recording")]
         [Tooltip("Profile-driven camera feed. Configure() is called on StartTeleop.")]
         [SerializeField] private CameraFeedController cameraFeed;
+        [Tooltip("Legacy MJPEG viewer. Configure() replaces its camera list with the profile topics.")]
+        [SerializeField] private CameraFeedViewer cameraFeedViewer;
         [Tooltip("Profile-driven dataset recorder. Configure() is called on StartTeleop.")]
         [SerializeField] private ProfileDrivenRecorder recorder;
+
+        /// <summary>Raised after the profile is applied so the HUD can subscribe to its topics.</summary>
+        public event Action<RobotProfile> TeleopStarted;
 
         private IRobotLink _link;
         private IRobotLink Link => _link ?? (_link = ResolveLink());
@@ -72,10 +79,30 @@ namespace OmniBot.VR.Control
         private bool _prevBothGrips;
 
         // ── Unity lifecycle ──────────────────────────────────────────────────────
+        private void OnEnable()
+        {
+            var conn = ConnectionManager.Instance;
+            if (conn != null) conn.OnConnectionStateChanged += OnConnectionChanged;
+        }
+
+        private void OnDisable()
+        {
+            var conn = ConnectionManager.Instance;
+            if (conn != null) conn.OnConnectionStateChanged -= OnConnectionChanged;
+        }
+
         private void Start()
         {
             if (gestureDetector == null)
                 gestureDetector = FindObjectOfType<GestureDetector>();
+        }
+
+        private void OnConnectionChanged(bool connected)
+        {
+            if (!connected || !_teleopActive || Profile == null) return;
+            AdvertiseTopics(Profile);
+            ConfigureSurfaces(Profile);
+            TeleopStarted?.Invoke(Profile);
         }
 
         private void Update()
@@ -144,12 +171,20 @@ namespace OmniBot.VR.Control
 
             AdvertiseTopics(profile);
             _teleopActive = true;
-
-            // Phase 4: configure the camera feed + recorder from the profile
-            if (cameraFeed != null) cameraFeed.Configure(profile);
-            if (recorder != null) recorder.Configure(profile);
+            ConfigureSurfaces(profile);
 
             Debug.Log($"[TeleopController] Teleop started — {profile.Name} ({profile.Drive}, arm {(profile.HasArm ? $"{profile.ArmDof}-DOF" : "none")}), IK={profile.IkLocation}.");
+            TeleopStarted?.Invoke(profile);
+        }
+
+        private void ConfigureSurfaces(RobotProfile profile)
+        {
+            if (cameraFeed != null) cameraFeed.Configure(profile);
+            if (cameraFeedViewer == null)
+                cameraFeedViewer = FindObjectOfType<CameraFeedViewer>();
+            if (cameraFeedViewer != null) cameraFeedViewer.Configure(profile);
+            if (recorder != null) recorder.Configure(profile);
+            EpisodeManager.Instance.Configure(profile);
         }
 
         /// <summary>Stop teleoperation: zero velocity, disarm arm, drop the schemes.</summary>
@@ -266,6 +301,10 @@ namespace OmniBot.VR.Control
                 Link.Advertise(p.Topics.EmergencyStop, "std_msgs/Bool");
             if (!string.IsNullOrEmpty(p.Topics.IkTargetPose))
                 Link.Advertise(p.Topics.IkTargetPose, "geometry_msgs/PoseStamped");
+            if (!string.IsNullOrEmpty(p.Topics.RecordStart))
+                Link.Advertise(p.Topics.RecordStart, "std_msgs/String");
+            if (!string.IsNullOrEmpty(p.Topics.RecordStop))
+                Link.Advertise(p.Topics.RecordStop, "std_msgs/Bool");
         }
     }
 }
