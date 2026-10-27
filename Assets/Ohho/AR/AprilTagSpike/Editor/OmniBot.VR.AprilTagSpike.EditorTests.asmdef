@@ -1,12 +1,15 @@
 {
-    "name": "OmniBot.VR.PlayModeTests",
+    "name": "OmniBot.VR.AprilTagSpike.EditorTests",
     "rootNamespace": "OmniBot.VR.Tests",
     "references": [
-        "OmniBot.VR",
+        "OmniBot.VR.AprilTagSpike",
+        "Oculus.VR",
         "UnityEngine.TestRunner",
         "UnityEditor.TestRunner"
     ],
-    "includePlatforms": [],
+    "includePlatforms": [
+        "Editor"
+    ],
     "excludePlatforms": [],
     "allowUnsafeCode": false,
     "overrideReferences": true,

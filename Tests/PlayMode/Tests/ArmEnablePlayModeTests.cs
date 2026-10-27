@@ -7,16 +7,19 @@ using OmniBot.VR.Core;
 using OmniBot.VR.Control;
 using OmniBot.VR.Control.Manip;
 
-namespace OmniBot.VR.Tests
+namespace OmniBot.VR.PlayModeTests
 {
     /// <summary>
     /// Play-mode pass of the sim clutch. The first joint command after the
     /// trigger closes must be the held pose, even if the hand is elsewhere.
     /// Does not connect to a robot.
     /// </summary>
+    [PrebuildSetup("OmniBot.VR.PlayModeTests.EmptySceneSetup")]
+    [PostBuildCleanup("OmniBot.VR.PlayModeTests.EmptySceneSetup")]
     public class ArmEnablePlayModeTests
     {
         [UnityTest]
+        [Timeout(60000)]
         public IEnumerator SimClutch_FirstCommandMatchesHeldPose()
         {
             var origin = new GameObject("playmode-arm-workspace");

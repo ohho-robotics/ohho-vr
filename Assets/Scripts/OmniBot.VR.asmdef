@@ -5,7 +5,11 @@
         "Oculus.VR",
         "Unity.TextMeshPro",
         "UnityEngine.UI",
-        "endel.nativewebsocket"
+        "Unity.InputSystem",
+        "Unity.WebRTC",
+        "endel.nativewebsocket",
+        "Ohho.TelemetryHud",
+        "OmniBot.VR.AprilTagSpike"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

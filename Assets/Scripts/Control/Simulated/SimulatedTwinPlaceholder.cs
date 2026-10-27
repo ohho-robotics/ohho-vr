@@ -5,6 +5,7 @@ using System.Runtime.CompilerServices;
 using UnityEngine;
 
 [assembly: InternalsVisibleTo("Assembly-CSharp-Editor")]
+[assembly: InternalsVisibleTo("OmniBot.VR.EditorTests")]
 
 namespace OmniBot.VR.Control
 {
