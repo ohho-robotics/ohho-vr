@@ -136,5 +136,12 @@ namespace OmniBot.VR.Control
         public string AiStatus;            // std_msgs/String — /ai/status
         public string Telemetry;           // std_msgs/String — /ohho/telemetry
         public string ControlModeActive;   // std_msgs/String — /control_mode/active
+
+        // Optional perception topics for the SLAM map panel. Blank fields fall
+        // back to the OmniBot names (/map, /scan, Nav2 costmaps). OHH-228.
+        public string Map;
+        public string Scan;
+        public string GlobalCostmap;
+        public string LocalCostmap;
     }
 }

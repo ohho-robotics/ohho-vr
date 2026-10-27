@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using OmniBot.VR.Core.Platform;
+using OmniBot.VR.Mapping;
 
 namespace OmniBot.VR.Control
 {
@@ -147,6 +148,10 @@ namespace OmniBot.VR.Control
                 AiStatus      = "/ai/status",
                 Telemetry     = "/ohho/telemetry",
                 ControlModeActive = "/control_mode/active",
+                Map           = MapTopics.DefaultMap,
+                Scan          = MapTopics.DefaultScan,
+                GlobalCostmap = MapTopics.DefaultGlobalCostmap,
+                LocalCostmap  = MapTopics.DefaultLocalCostmap,
             };
             // Image topics by category (mirrors deriveSensors image list)
             if (category == "mobile-manipulator")
