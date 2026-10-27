@@ -295,7 +295,7 @@ driven by pinch strength.
    → compute hand pose RELATIVE to that origin
 3. Scale + clamp into the arm's reachable sphere   (reach from RobotProfile.joints)
 4. SOLVE IK  → joint angles, each clamped to JointSpec.min/max
-5. Stream  /arm/joint_commands  @ 20 Hz   (names + limits from RobotProfile)
+5. Stream  /arm/joint_commands/teleop  @ 20 Hz   (names + limits from RobotProfile)
 6. pinch → gripper joint (RobotProfile.joints last entry)
 ```
 
@@ -328,7 +328,7 @@ Variants selected from `RobotConfig.capabilities` / `armDof`:
 1. Selection → **OmniBot Pro** → `RobotProfile { drive: "mecanum", holonomic: true, armDof: 6, joints: SO101_JOINTS, rosTopics.cmdVel: "/cmd_vel/teleop", … }`.
 2. Factory → `MecanumDriveScheme` + `HandIK6DOF` (analytic SO-101 solver).
 3. **Base:** left stick → vx/vy strafe, right stick X → yaw → `/cmd_vel/teleop` @ 20 Hz.
-4. **Arm:** explicit enable (Left X or thumbs-up). Real robots publish `/arm/enable` only after a second Left X. The right index trigger is the clutch: motion streams only while it is held, and the first sample matches the held joints. Then analytic IK → `/arm/joint_commands` @ 20 Hz, steps capped at 0.15 rad; pinch → `arm_gripper`. Poor tracking jogs a joint from the right stick. Both grips = e-stop, which also disarms the arm.
+4. **Arm:** explicit enable (Left X, or left-hand thumbs-up held 0.5 s). A simulated garage robot enables on one request. Real robots publish `/arm/enable` only after a second Left X; a thumbs-up requests enable and never confirms a real robot. The right index trigger is the clutch: motion streams only while it is held, and the first sample matches the held joints. Then right-hand pose → analytic IK → 6 joints → `/arm/joint_commands/teleop` @ 20 Hz, steps capped at 0.15 rad; pinch → `arm_gripper`. Poor tracking jogs a joint from the right stick. Both grips = e-stop, which also disarms the arm. `arm_cmd_mux` forwards `/arm/joint_commands/teleop` only in teleop when e-stop is clear. A later `teleop_safety` node will sit on this topic before the mux.
 5. All in passthrough: a translucent twin of the SO-101 overlays the real table so the operator previews motion before the real arm catches up.
 
 ---

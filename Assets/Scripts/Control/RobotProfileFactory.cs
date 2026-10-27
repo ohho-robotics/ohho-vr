@@ -182,7 +182,7 @@ namespace OmniBot.VR.Control
                     p.ArmLinkLengths = (float[])RobotDescriptor.So101.LinkLengths.Clone();
                     p.IsDualArm = false;
                     // OmniBot publishes arm commands + enables on the arm_ topics.
-                    p.Topics.ArmCommands = "/arm/joint_commands";
+                    p.Topics.ArmCommands = "/arm/joint_commands/teleop";
                     p.Topics.ArmEnable = "/arm/enable";
                     p.Topics.JointStates = "/arm/joint_states";
                     break;
