@@ -106,7 +106,7 @@ The first teleop session can show an onboarding card with those hints plus "Both
 On the teleop page:
 
 1. **Start Recording**. [`EpisodeManager`](../Assets/Scripts/Recording/EpisodeManager.cs) names the episode `ep_<unix time>` if you do not pass a name, and publishes `/vr/record_start` (`std_msgs/String`).
-2. [`DatasetRecorder`](../Assets/Scripts/Recording/DatasetRecorder.cs) appends JSONL at 30 Hz: arm position, base velocity, odom position and heading, arm command, base command. The file is written when the episode stops, under `Application.persistentDataPath/recordings/<episode>.jsonl` on the headset.
+2. [`DatasetRecorder`](../Archive/legacy-control/DatasetRecorder.cs) appends JSONL at 30 Hz: arm position, base velocity, odom position and heading, arm command, base command. The file is written when the episode stops, under `Application.persistentDataPath/recordings/<episode>.jsonl` on the headset.
 3. **Stop & Save** publishes `/vr/record_stop` true. **Discard** publishes false and drops the buffer.
 
 **Export to Robot** POSTs each JSONL as multipart field `file` to `http://<robot-ip>:8765/upload_episode`. Nothing in this repo or in the OmniBot tree searched for this guide implements that path. Foxglove on the robot also uses port 8765 and is a WebSocket, not this upload. Expect export to fail. The JSONL remains on the headset.
