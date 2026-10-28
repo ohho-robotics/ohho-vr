@@ -7,11 +7,15 @@ using UnityEngine.Networking;
 namespace OmniBot.VR.Video
 {
     /// <summary>
-    /// MJPEG from <c>web_video_server</c>. Bytes are parsed on the main thread;
-    /// baseline JPEG decode runs on a worker. The main thread only uploads the
-    /// latest RGB buffer (<see cref="Texture2D.LoadRawTextureData"/>). Frames
-    /// are capped at <see cref="FramePacer.MaxFps"/>. <see cref="JpegQuality"/>
-    /// and <see cref="JpegWidth"/> are sent as <c>quality</c> and <c>width</c>.
+    /// MJPEG from <c>web_video_server</c> over HTTP multipart/x-mixed-replace.
+    /// Extracted from the legacy <c>CameraFeedViewer</c> so the transport is
+    /// decoupled from the UI and swappable with <see cref="WebRtcVideoSource"/>.
+    /// Bytes are parsed on the main thread; baseline JPEG decode runs on a
+    /// worker. The main thread only uploads the latest RGB buffer
+    /// (<see cref="Texture2D.LoadRawTextureData"/>). Frames are capped at
+    /// <see cref="FramePacer.MaxFps"/>. <see cref="JpegQuality"/> and
+    /// <see cref="JpegWidth"/> are sent as <c>quality</c> and <c>width</c>.
+    /// This is the fallback when WebRTC signaling or the decoder is unavailable.
     /// </summary>
     public sealed class MjpegVideoSource : IVideoSource
     {
@@ -82,6 +86,10 @@ namespace OmniBot.VR.Video
                 _host.StopCoroutine(_coroutine);
                 _coroutine = null;
             }
+        }
+
+        public void Tick()
+        {
         }
 
         public void Dispose()

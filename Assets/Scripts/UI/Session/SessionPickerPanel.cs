@@ -32,8 +32,10 @@ namespace OmniBot.VR.UI.Session
         private string _robotId;
         private string _aliasId;
         private string _robotName;
-        private string _ip = EndpointAddresses.DefaultIp;
-        private string _port = EndpointAddresses.RosbridgePort.ToString(CultureInfo.InvariantCulture);
+        private string _simIp = EndpointAddresses.DefaultIp;
+        private string _simPort = EndpointAddresses.RosbridgePort.ToString(CultureInfo.InvariantCulture);
+        private string _realIp = EndpointAddresses.DefaultIp;
+        private string _realPort = EndpointAddresses.RosbridgePort.ToString(CultureInfo.InvariantCulture);
         private string _cloudUrl = "wss://";
         private PickerStep _step = PickerStep.Mode;
         private bool _safetyAcknowledged;
@@ -51,13 +53,16 @@ namespace OmniBot.VR.UI.Session
         private static readonly Color TextMain = new Color(0.95f, 0.97f, 1f, 1f);
         private static readonly Color TextMut = new Color(0.70f, 0.76f, 0.84f, 1f);
 
-        public void Open(string robotId, string aliasId, string robotName, string ip, int port, PickerStep step)
+        public void Open(string robotId, string aliasId, string robotName,
+            string simIp, int simPort, string realIp, int realPort, PickerStep step)
         {
             _robotId = robotId;
             _aliasId = aliasId;
             _robotName = string.IsNullOrEmpty(robotName) ? "Robot" : robotName;
-            if (!string.IsNullOrEmpty(ip)) _ip = ip;
-            if (port > 0) _port = port.ToString(CultureInfo.InvariantCulture);
+            _simIp = string.IsNullOrEmpty(simIp) ? EndpointAddresses.DefaultIp : simIp;
+            _simPort = (simPort > 0 ? simPort : EndpointAddresses.RosbridgePort).ToString(CultureInfo.InvariantCulture);
+            _realIp = string.IsNullOrEmpty(realIp) ? EndpointAddresses.DefaultIp : realIp;
+            _realPort = (realPort > 0 ? realPort : EndpointAddresses.RosbridgePort).ToString(CultureInfo.InvariantCulture);
             _safetyAcknowledged = false;
             _refreshStarted = false;
             _registryNote = null;
@@ -78,10 +83,10 @@ namespace OmniBot.VR.UI.Session
             bg.color = new Color(0.039f, 0.055f, 0.102f, 0.98f);
 
             _title = MakeText("Title", transform, 36, TextMain, FontStyles.Bold, TextAlignmentOptions.MidlineLeft);
-            Place(_title.rectTransform, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(48f, -24f), new Vector2(-48f, -88f));
+            Place(_title.rectTransform, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(48f, -88f), new Vector2(-48f, -24f));
 
             _status = MakeText("Status", transform, 22, TextMut, FontStyles.Normal, TextAlignmentOptions.MidlineLeft);
-            Place(_status.rectTransform, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(48f, -96f), new Vector2(-48f, -140f));
+            Place(_status.rectTransform, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(48f, -140f), new Vector2(-48f, -96f));
 
             var contentGo = new GameObject("Content", typeof(RectTransform));
             contentGo.transform.SetParent(transform, false);
@@ -174,7 +179,7 @@ namespace OmniBot.VR.UI.Session
 
         private void ConfirmLocal(string sessionId)
         {
-            Publish(SessionPlanner.LocalDesktop(_robotId, _aliasId, _ip, PortOrDefault(), SessionCatalog.Shared, sessionId));
+            Publish(SessionPlanner.LocalDesktop(_robotId, _aliasId, _simIp, ParsePort(_simPort), SessionCatalog.Shared, sessionId));
         }
 
         private void ConfirmInHeadset()
@@ -200,7 +205,7 @@ namespace OmniBot.VR.UI.Session
 
         private void ConfirmReal(string sessionId)
         {
-            Publish(SessionPlanner.DriveReal(_robotId, _aliasId, _ip, PortOrDefault(), SessionCatalog.Shared,
+            Publish(SessionPlanner.DriveReal(_robotId, _aliasId, _realIp, ParsePort(_realPort), SessionCatalog.Shared,
                 sessionId, _safetyAcknowledged, RealRobotSafety.TutorialSeen));
         }
 
@@ -271,10 +276,10 @@ namespace OmniBot.VR.UI.Session
             });
         }
 
-        private int PortOrDefault()
+        private static int ParsePort(string text)
         {
-            if (string.IsNullOrWhiteSpace(_port)) return EndpointAddresses.RosbridgePort;
-            if (!int.TryParse(_port.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out int port))
+            if (string.IsNullOrWhiteSpace(text)) return EndpointAddresses.RosbridgePort;
+            if (!int.TryParse(text.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out int port))
                 return -1;
             return port;
         }
@@ -307,11 +312,22 @@ namespace OmniBot.VR.UI.Session
             rowLe.minHeight = 56f;
             rowLe.preferredHeight = 56f;
 
-            var ip = AddFieldTo(row.transform, "IP", _ip, value => _ip = value);
+            bool real = _step == PickerStep.RealConnect;
+            string ipValue = real ? _realIp : _simIp;
+            string portValue = real ? _realPort : _simPort;
+            var ip = AddFieldTo(row.transform, "IP", ipValue, value =>
+            {
+                if (real) _realIp = value;
+                else _simIp = value;
+            });
             var ipLe = ip.gameObject.AddComponent<LayoutElement>();
             ipLe.flexibleWidth = 3f;
             ipLe.minHeight = 56f;
-            var port = AddFieldTo(row.transform, "Port", _port, value => _port = value);
+            var port = AddFieldTo(row.transform, "Port", portValue, value =>
+            {
+                if (real) _realPort = value;
+                else _simPort = value;
+            });
             var portLe = port.gameObject.AddComponent<LayoutElement>();
             portLe.flexibleWidth = 1f;
             portLe.minHeight = 56f;

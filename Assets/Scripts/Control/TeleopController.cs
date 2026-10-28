@@ -1,6 +1,8 @@
+using System;
 using UnityEngine;
 using OmniBot.VR.Core;
 using OmniBot.VR.Input;
+using OmniBot.VR.UI;
 using OmniBot.VR.Video;
 using OmniBot.VR.Recording;
 using OmniBot.VR.Control.Drive;
@@ -18,8 +20,8 @@ namespace OmniBot.VR.Control
     /// poses → manipulation, publishing to the robot over the
     /// <see cref="IRobotLink"/>.
     ///
-    /// Replaces the legacy <c>Input/BaseController.cs</c> +
-    /// <c>Input/HandTrackingArmController.cs</c> as the single teleop GameObject.
+    /// Replaces the archived BaseController and HandTrackingArmController
+    /// (Archive/legacy-control) as the single teleop GameObject.
     /// Those MonoBehaviours were hardcoded to OmniBot; this one is agnostic — the
     /// profile decides what gets driven and how.
     /// </summary>
@@ -39,8 +41,13 @@ namespace OmniBot.VR.Control
         [Header("Phase 4 — video + recording")]
         [Tooltip("Profile-driven camera feed. Configure() is called on StartTeleop.")]
         [SerializeField] private CameraFeedController cameraFeed;
+        [Tooltip("Legacy MJPEG viewer. Configure() replaces its camera list with the profile topics.")]
+        [SerializeField] private CameraFeedViewer cameraFeedViewer;
         [Tooltip("Profile-driven dataset recorder. Configure() is called on StartTeleop.")]
         [SerializeField] private ProfileDrivenRecorder recorder;
+
+        /// <summary>Raised after the profile is applied so the HUD can subscribe to its topics.</summary>
+        public event Action<RobotProfile> TeleopStarted;
 
         private IRobotLink _link;
         private IRobotLink Link => _link ?? (_link = ResolveLink());
@@ -61,20 +68,47 @@ namespace OmniBot.VR.Control
         public string DriveHint => _drive?.HudHint ?? "No drive on this robot";
         /// <summary>One-line manipulation control hint (for onboarding / HUD).</summary>
         public string ManipHint => _manip?.HudHint ?? "No arm on this robot";
+        /// <summary>Live arm-gate status (enable, REAL confirm, clutch, jog).</summary>
+        public string ArmStatus => _manip?.StatusText ?? "";
 
         // ── Thumbs-up gesture state (ported from HandTrackingArmController) ──────
         private bool _wasThumbsUp;
         private float _thumbsUpHoldTimer;
         private const float ThumbsUpHoldRequired = 0.5f;
+        private const float ClutchTriggerThreshold = 0.6f;
+
+        private bool _originOwned;
+        private GameObject _ownedOrigin;
+        private WorkspaceSphereVisual _workspaceVisual;
 
         // ── Previous both-grips state for edge detection ─────────────────────────
         private bool _prevBothGrips;
 
         // ── Unity lifecycle ──────────────────────────────────────────────────────
+        private void OnEnable()
+        {
+            var conn = ConnectionManager.Instance;
+            if (conn != null) conn.OnConnectionStateChanged += OnConnectionChanged;
+        }
+
+        private void OnDisable()
+        {
+            var conn = ConnectionManager.Instance;
+            if (conn != null) conn.OnConnectionStateChanged -= OnConnectionChanged;
+        }
+
         private void Start()
         {
             if (gestureDetector == null)
                 gestureDetector = FindObjectOfType<GestureDetector>();
+        }
+
+        private void OnConnectionChanged(bool connected)
+        {
+            if (!connected || !_teleopActive || Profile == null) return;
+            AdvertiseTopics(Profile);
+            ConfigureSurfaces(Profile);
+            TeleopStarted?.Invoke(Profile);
         }
 
         private void Update()
@@ -109,18 +143,57 @@ namespace OmniBot.VR.Control
                 _drive.Tick(ref input, Link);
 
             // ── Manipulation (hand poses) ────────────────────────────────────────
-            if (_manip != null && gestureDetector != null)
+            // Runs without a GestureDetector so controller jog and the enable
+            // button still work when hand tracking is absent.
+            if (_manip != null)
             {
-                HandPose rightHand = BuildHandPose(gestureDetector.rightHand);
-                HandPose leftHand = BuildHandPose(gestureDetector.leftHand);
+                HandPose rightHand = default;
+                HandPose leftHand = default;
+                bool trackingGood = false;
+                if (gestureDetector != null)
+                {
+                    rightHand = BuildHandPose(gestureDetector.rightHand);
+                    leftHand = BuildHandPose(gestureDetector.leftHand);
+                    trackingGood = rightHand.Quality == HandTrackingQuality.Good;
+                    TickThumbsUpToggle(gestureDetector.leftHand);
+                }
 
-                // Thumbs-up gesture drives arm-enable toggle (needs the OVRHand ref
-                // for the skeleton-based check, like the legacy controller).
-                TickThumbsUpToggle(gestureDetector.leftHand);
+                bool clutch = OVRInput.Get(OVRInput.Axis1D.SecondaryIndexTrigger, OVRInput.Controller.RTouch) >= ClutchTriggerThreshold
+                    || OVRInput.Get(OVRInput.Button.SecondaryIndexTrigger, OVRInput.Controller.RTouch);
+                bool xDown = OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.LTouch);
+                bool cycleJoint = OVRInput.GetDown(OVRInput.Button.PrimaryThumbstick, OVRInput.Controller.LTouch);
+                bool thumbsPulse = _thumbsUpPulse;
+                _thumbsUpPulse = false;
 
+                var armInput = new ArmOperatorInput
+                {
+                    ClutchHeld = clutch,
+                    TrackingGood = trackingGood,
+                    JogAxis = rightStick.y,
+                    CycleJointPressed = cycleJoint,
+                    EmergencyStop = bothGrips,
+                    DeltaTime = Time.deltaTime,
+                };
+                // Left X confirms a pending REAL enable. A thumbs-up never does.
+                // Either control disarms immediately, and either requests enable
+                // when the arm is off. One press cannot both request and confirm.
+                var phase = _manip.EnablePhase;
+                if (phase == ArmEnablePhase.AwaitingRealConfirmation && xDown)
+                    armInput.ConfirmRequested = true;
+                else if (phase == ArmEnablePhase.Armed && (xDown || thumbsPulse))
+                    armInput.DisarmRequested = true;
+                else if (phase == ArmEnablePhase.Off && (xDown || thumbsPulse))
+                    armInput.EnableRequested = true;
+
+                _manip.FeedArmInput(armInput);
                 _manip.Tick(ref rightHand, ref leftHand, Link);
+
+                if (_workspaceVisual != null)
+                    _workspaceVisual.SetAppearance(_manip.EnablePhase, _manip.ClutchEngaged, trackingGood);
             }
         }
+
+        private bool _thumbsUpPulse;
 
         // ── Public API (called by GaragePanelController / OhhoVrApp) ──────────────
 
@@ -135,17 +208,29 @@ namespace OmniBot.VR.Control
             StopTeleop();
 
             Profile = profile;
+            if (profile.HasArm)
+                EnsureWorkspaceOrigin(profile);
             _drive = ControlSchemeFactory.CreateDriveScheme(profile);
             _manip = ControlSchemeFactory.CreateManipulationScheme(profile, handWorkspaceOrigin);
+            if (profile.HasArm)
+                EnsureWorkspaceVisual(profile);
 
             AdvertiseTopics(profile);
             _teleopActive = true;
-
-            // Phase 4: configure the camera feed + recorder from the profile
-            if (cameraFeed != null) cameraFeed.Configure(profile);
-            if (recorder != null) recorder.Configure(profile);
+            ConfigureSurfaces(profile);
 
             Debug.Log($"[TeleopController] Teleop started — {profile.Name} ({profile.Drive}, arm {(profile.HasArm ? $"{profile.ArmDof}-DOF" : "none")}), IK={profile.IkLocation}.");
+            TeleopStarted?.Invoke(profile);
+        }
+
+        private void ConfigureSurfaces(RobotProfile profile)
+        {
+            if (cameraFeed != null) cameraFeed.Configure(profile);
+            if (cameraFeedViewer == null)
+                cameraFeedViewer = FindObjectOfType<CameraFeedViewer>();
+            if (cameraFeedViewer != null) cameraFeedViewer.Configure(profile);
+            if (recorder != null) recorder.Configure(profile);
+            EpisodeManager.Instance.Configure(profile);
         }
 
         /// <summary>Stop teleoperation: zero velocity, disarm arm, drop the schemes.</summary>
@@ -160,6 +245,19 @@ namespace OmniBot.VR.Control
             _teleopActive = false;
             _wasThumbsUp = false;
             _thumbsUpHoldTimer = 0f;
+            _thumbsUpPulse = false;
+            if (_workspaceVisual != null)
+            {
+                Destroy(_workspaceVisual.gameObject);
+                _workspaceVisual = null;
+            }
+            if (_originOwned && _ownedOrigin != null)
+            {
+                Destroy(_ownedOrigin);
+                _ownedOrigin = null;
+                handWorkspaceOrigin = null;
+                _originOwned = false;
+            }
         }
 
         /// <summary>Whether a robot is currently being teleoperated.</summary>
@@ -175,6 +273,33 @@ namespace OmniBot.VR.Control
             _link = link ?? ResolveLink();
         }
 
+        /// <summary>
+        /// True when commands go out through <see cref="RosBridgeLink"/>.
+        /// An assigned transport such as the play-mode fake link is false, so a
+        /// session must not also open a rosbridge socket.
+        /// </summary>
+        public bool PublishesViaRosBridge => (_link ?? ResolveLink()) is RosBridgeLink;
+
+        private void EnsureWorkspaceOrigin(RobotProfile profile)
+        {
+            if (handWorkspaceOrigin != null || profile == null) return;
+            _ownedOrigin = new GameObject("HandWorkspaceOrigin");
+            _ownedOrigin.transform.position = new Vector3(0f, profile.ArmBaseHeight, 0f);
+            handWorkspaceOrigin = _ownedOrigin.transform;
+            _originOwned = true;
+        }
+
+        private void EnsureWorkspaceVisual(RobotProfile profile)
+        {
+            if (handWorkspaceOrigin == null || profile == null) return;
+            var go = new GameObject("ArmWorkspaceSphere");
+            go.transform.SetParent(handWorkspaceOrigin, false);
+            _workspaceVisual = go.AddComponent<WorkspaceSphereVisual>();
+            _workspaceVisual.Configure(profile.HandWorkspaceRadius > 0f
+                ? profile.HandWorkspaceRadius
+                : RobotDescriptor.So101.HandWorkspaceRadius);
+        }
+
         // ── Input helpers ─────────────────────────────────────────────────────────
 
         private HandPose BuildHandPose(OVRHand hand)
@@ -182,9 +307,11 @@ namespace OmniBot.VR.Control
             if (gestureDetector == null || hand == null || !gestureDetector.IsHandTracked(hand))
                 return default;
 
+            bool good = gestureDetector.IsHandTrackingGood(hand);
             return new HandPose
             {
                 Tracked = true,
+                Quality = good ? HandTrackingQuality.Good : HandTrackingQuality.Poor,
                 Position = gestureDetector.GetHandPosition(hand),
                 Rotation = gestureDetector.GetHandRotation(hand),
                 PinchStrength = gestureDetector.GetPinchStrength(hand),
@@ -203,10 +330,8 @@ namespace OmniBot.VR.Control
                 _thumbsUpHoldTimer += Time.deltaTime;
                 if (!_wasThumbsUp && _thumbsUpHoldTimer >= ThumbsUpHoldRequired)
                 {
-                    if (_manip is HandIK6DofScheme handIk)
-                        handIk.ToggleArmEnabled(Link);
-                    else
-                        _manip.SetArmEnabled(!_manip.ArmEnabled, Link);
+                    // Request only. REAL confirmation is Left X, not this gesture.
+                    _thumbsUpPulse = true;
                     _wasThumbsUp = true;
                 }
             }
@@ -272,6 +397,10 @@ namespace OmniBot.VR.Control
                 Link.Advertise(p.Topics.EmergencyStop, "std_msgs/Bool");
             if (!string.IsNullOrEmpty(p.Topics.IkTargetPose))
                 Link.Advertise(p.Topics.IkTargetPose, "geometry_msgs/PoseStamped");
+            if (!string.IsNullOrEmpty(p.Topics.RecordStart))
+                Link.Advertise(p.Topics.RecordStart, "std_msgs/String");
+            if (!string.IsNullOrEmpty(p.Topics.RecordStop))
+                Link.Advertise(p.Topics.RecordStop, "std_msgs/Bool");
         }
     }
 }
