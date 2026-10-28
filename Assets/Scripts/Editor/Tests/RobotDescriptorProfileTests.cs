@@ -7,6 +7,7 @@ using OmniBot.VR.Control;
 using OmniBot.VR.Control.Drive;
 using OmniBot.VR.Control.Manip;
 using OmniBot.VR.Core;
+using OmniBot.VR.Recording;
 using OmniBot.VR.UI;
 using OmniBot.VR.Video;
 using UnityEngine;
