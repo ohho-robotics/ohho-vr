@@ -7,7 +7,9 @@ using OmniBot.VR.Policy;
 using OmniBot.VR.UI;
 using LatchedRobotDescriptor = OmniBot.VR.Descriptor.RobotDescriptor;
 using OmniBot.VR.UI.Garage;
+using OmniBot.VR.UI.Preflight;
 using OmniBot.VR.UI.Session;
+using OmniBot.VR.Control.Preflight;
 
 namespace OmniBot.VR.App
 {
@@ -56,6 +58,8 @@ namespace OmniBot.VR.App
 
         private SessionPickerPanel _picker;
         private bool _pickerHooked;
+        private PreflightPanelController _preflight;
+        private bool _preflightHooked;
         private RobotProfile _pendingProfile;
         private string _pendingName;
         private string _pendingUserRobotId;
@@ -101,6 +105,7 @@ namespace OmniBot.VR.App
                 fleetPanelController.QuickResume -= OnQuickResume;
             }
             UnhookPicker();
+            UnhookPreflight();
 
             var conn = ConnectionManager.Instance;
             if (conn != null)
@@ -175,11 +180,24 @@ namespace OmniBot.VR.App
         }
 
         // ── Panel routing ─────────────────────────────────────────────────────
-        public void ShowLogin() => Activate(login: true, console: false, garage: false, teleop: false);
-        public void ShowConsole() => Activate(login: false, console: true, garage: false, teleop: false);
-        public void ShowGarage() => Activate(login: false, console: false, garage: true, teleop: false);
+        public void ShowLogin()
+        {
+            HidePreflight();
+            Activate(login: true, console: false, garage: false, teleop: false);
+        }
+        public void ShowConsole()
+        {
+            HidePreflight();
+            Activate(login: false, console: true, garage: false, teleop: false);
+        }
+        public void ShowGarage()
+        {
+            HidePreflight();
+            Activate(login: false, console: false, garage: true, teleop: false);
+        }
         public void ShowSessionPicker()
         {
+            HidePreflight();
             EnsurePicker();
             Activate(login: false, console: false, garage: false, teleop: false, session: true);
         }
@@ -336,6 +354,7 @@ namespace OmniBot.VR.App
         public void StopTeleopAndReturnToGarage()
         {
             if (teleopController != null) teleopController.StopTeleop();
+            PreflightGate.Allow();
             ShowGarage();
         }
 
@@ -452,27 +471,86 @@ namespace OmniBot.VR.App
 
             if (endpoint.Offline)
             {
+                PreflightGate.Allow();
+                var conn = ConnectionManager.Instance;
+                if (conn != null && conn.IsConnected) conn.Disconnect();
                 if (_offlineLink == null) _offlineLink = new OfflineKinematicLink();
                 _offlineLink.IsConnected = true;
                 teleopController.SetLink(_offlineLink);
-            }
-            else
-            {
-                teleopController.SetLink(null);
-                // The headset scene leaves linkProvider empty, so this is RosBridgeLink
-                // and the endpoint is dialed. A stand-in transport already carries
-                // teleop and must not also open a socket.
-                if (teleopController.PublishesViaRosBridge)
-                    ConnectionManager.Instance.ConnectEndpoint(endpoint);
+                PreparePolicyPanel(endpoint.Kind);
+                teleopController.StartTeleop(_pendingProfile);
+                ShowTeleop();
+                PaintSessionBanners(endpoint.Kind);
+                if (onboarding != null)
+                    onboarding.ShowIfFirstTime(teleopController.DriveHint, teleopController.ManipHint);
+                return;
             }
 
-            PreparePolicyPanel(endpoint.Kind);
+            teleopController.SetLink(null);
+            if (teleopController.IsTeleopActive) teleopController.StopTeleop();
+            // A stand-in transport already carries teleop and must not also open a
+            // socket or wait on a rosbridge preflight. The headset scene leaves
+            // linkProvider empty, so this is RosBridgeLink and preflight dials it.
+            if (!teleopController.PublishesViaRosBridge)
+            {
+                PreflightGate.Allow();
+                PreparePolicyPanel(endpoint.Kind);
+                teleopController.StartTeleop(_pendingProfile);
+                ShowTeleop();
+                PaintSessionBanners(endpoint.Kind);
+                if (onboarding != null)
+                    onboarding.ShowIfFirstTime(teleopController.DriveHint, teleopController.ManipHint);
+                return;
+            }
+
+            PreflightGate.Hold(endpoint.Kind);
+            ConnectionManager.Instance.ConnectEndpoint(endpoint);
+            EnsurePreflight();
+            ShowPreflight();
+            _preflight.Begin(endpoint);
+        }
+
+        private void OnPreflightFinished(PreflightReport report)
+        {
+            if (report == null || _pendingProfile == null || teleopController == null) return;
+            PreflightGate.Apply(report);
+            if (report.BlocksTeleop)
+            {
+                if (teleopController.IsTeleopActive) teleopController.StopTeleop();
+                Debug.LogWarning("[OhhoVrApp] " + report.Summary);
+                return;
+            }
+
+            if (teleopController.IsTeleopActive && teleopController.Profile == _pendingProfile)
+                return;
+
+            var kind = ActiveSession.Current != null ? ActiveSession.Current.Kind : SessionKind.Sim;
+            PreparePolicyPanel(kind);
             teleopController.StartTeleop(_pendingProfile);
             ShowTeleop();
-            PaintSessionBanners(endpoint.Kind);
-
-            if (onboarding != null)
+            PaintSessionBanners(kind);
+            if (onboarding != null && !report.HasFailure)
                 onboarding.ShowIfFirstTime(teleopController.DriveHint, teleopController.ManipHint);
+        }
+
+        private void OnPreflightCancelled()
+        {
+            if (teleopController != null) teleopController.StopTeleop();
+            PreflightGate.Hold(SessionKind.Real);
+            var conn = ConnectionManager.Instance;
+            if (conn != null && conn.IsConnected) conn.Disconnect();
+            ShowSessionPicker();
+        }
+
+        private void ShowPreflight()
+        {
+            Activate(login: false, console: false, garage: false, teleop: false);
+            if (_preflight != null) _preflight.gameObject.SetActive(true);
+        }
+
+        private void HidePreflight()
+        {
+            if (_preflight != null) _preflight.Hide();
         }
 
         private void PaintSessionBanners(SessionKind kind)
@@ -541,6 +619,45 @@ namespace OmniBot.VR.App
             _picker.Confirmed -= OnSessionConfirmed;
             _picker.Cancelled -= ShowGarage;
             _pickerHooked = false;
+        }
+
+        private void EnsurePreflight()
+        {
+            if (_preflight != null)
+            {
+                HookPreflight();
+                return;
+            }
+
+            var parent = sessionPickerPanel != null
+                ? sessionPickerPanel.transform.parent
+                : garagePanel != null ? garagePanel.transform.parent : transform;
+            var go = new GameObject("Connection Preflight", typeof(RectTransform));
+            go.transform.SetParent(parent, false);
+            var rt = (RectTransform)go.transform;
+            rt.anchorMin = Vector2.zero;
+            rt.anchorMax = Vector2.one;
+            rt.offsetMin = Vector2.zero;
+            rt.offsetMax = Vector2.zero;
+            go.SetActive(false);
+            _preflight = go.AddComponent<PreflightPanelController>();
+            HookPreflight();
+        }
+
+        private void HookPreflight()
+        {
+            if (_preflightHooked || _preflight == null) return;
+            _preflight.Finished += OnPreflightFinished;
+            _preflight.Cancelled += OnPreflightCancelled;
+            _preflightHooked = true;
+        }
+
+        private void UnhookPreflight()
+        {
+            if (!_preflightHooked || _preflight == null) return;
+            _preflight.Finished -= OnPreflightFinished;
+            _preflight.Cancelled -= OnPreflightCancelled;
+            _preflightHooked = false;
         }
     }
 }
