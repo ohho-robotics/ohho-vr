@@ -492,6 +492,8 @@ namespace OmniBot.VR.UI
             ApplyText(velocityText, _velSb, ref _velChars, ref _velCharsLen);
             ApplyText(armText, _armSb, ref _armChars, ref _armCharsLen);
             ApplyText(modeText, _modeSb, ref _modeChars, ref _modeCharsLen);
+            if (hintsText != null && _teleop != null)
+                hintsText.text = _teleop.DriveHint + "\n" + _teleop.ManipHint + "\n" + _teleop.ArmStatus;
         }
 
         static void ApplyText(TMP_Text label, StringBuilder sb, ref char[] cache, ref int cacheLen)
@@ -702,7 +704,7 @@ namespace OmniBot.VR.UI
             if (robotNameText != null)
                 robotNameText.text = profile != null ? profile.Name : "No robot selected";
             if (hintsText != null && _teleop != null)
-                hintsText.text = $"{_teleop.DriveHint}\n{_teleop.ManipHint}";
+                hintsText.text = _teleop.DriveHint + "\n" + _teleop.ManipHint + "\n" + _teleop.ArmStatus;
         }
 
         // ── Navigation ────────────────────────────────────────────────────────
