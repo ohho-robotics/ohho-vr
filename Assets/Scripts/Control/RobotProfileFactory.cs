@@ -139,6 +139,7 @@ namespace OmniBot.VR.Control
                 && caps.WzRadS <= 0
                 && hasArm;
             var topics = TopicsFromDescriptor(descriptor, fixedBase, armOnly);
+            ApplyPolicyTopics(topics, hasArm);
             if (sameRobot && catalogFallback.Topics != null)
                 CopyCatalogOnlyTopics(topics, catalogFallback.Topics, armOnly);
 
@@ -209,6 +210,10 @@ namespace OmniBot.VR.Control
                 ArmBaseHeight = armBase,
                 ArmMaxReach = armReach,
                 ArmLinkLengths = linkLengths,
+                PolicyModelsFallback = sameRobot && catalogFallback.PolicyModelsFallback != null
+                    ? catalogFallback.PolicyModelsFallback
+                    : (hasArm ? "act,smolvla,diffusion,openvla" : ""),
+                ServeBaseUrl = sameRobot ? (catalogFallback.ServeBaseUrl ?? "") : "",
                 MaxJointDeltaRad = jointDelta,
                 Deployment = sameRobot ? catalogFallback.Deployment : ArmDeployment.Real,
                 CapsFromDescriptor = true,
@@ -269,6 +274,8 @@ namespace OmniBot.VR.Control
                 IsLegged = isLegged,
                 IsDualArm = category == "humanoid",
                 IkLocation = IkLocation.Headset, // default: solve in Unity
+                PolicyModelsFallback = hasArm ? "act,smolvla,diffusion,openvla" : "",
+                ServeBaseUrl = "",
                 Topics = BuildTopics(spec.BaseDof, hasArm, category, jointStatesTopic),
                 HandWorkspaceRadius = RobotDescriptor.So101.HandWorkspaceRadius,
                 ArmBaseHeight = hasArm ? RobotDescriptor.So101.BaseHeight : 0f,
@@ -296,6 +303,14 @@ namespace OmniBot.VR.Control
                 Odom          = baseDof > 0 ? "/odom" : "",
                 Imu           = "/imu/data",
                 JointStates   = jointStates,
+                ArmCmdMode    = hasArm ? "/arm/cmd_mode" : "",
+                PolicyEnable  = hasArm ? "/policy/enable" : "",
+                PolicyTask    = hasArm ? "/policy/task" : "",
+                PolicyLoad    = hasArm ? "/policy/load" : "",
+                PolicyModels  = hasArm ? "/policy/models" : "",
+                PolicyCmdVel  = hasArm ? "/cmd_vel/vla" : "",
+                AiStatus      = "/ai/status",
+                Telemetry     = "/ohho/telemetry",
                 Map           = MapTopics.DefaultMap,
                 Scan          = MapTopics.DefaultScan,
                 GlobalCostmap = MapTopics.DefaultGlobalCostmap,
@@ -552,10 +567,12 @@ namespace OmniBot.VR.Control
         private static void CopyCatalogOnlyTopics(RobotTopics target, RobotTopics catalog, bool armOnly)
         {
             // The base mux is not part of an arm-only document.
+            // A null ControlModeActive means the catalog never set it, so the
+            // policy-topic default stays.
             if (!armOnly)
             {
                 target.ControlMode = catalog.ControlMode;
-                target.ControlModeActive = catalog.ControlModeActive;
+                if (catalog.ControlModeActive != null) target.ControlModeActive = catalog.ControlModeActive;
             }
 
             target.ArmModeActive = catalog.ArmModeActive;
@@ -572,6 +589,38 @@ namespace OmniBot.VR.Control
             target.Scan = catalog.Scan;
             target.GlobalCostmap = catalog.GlobalCostmap;
             target.LocalCostmap = catalog.LocalCostmap;
+            // Null means the catalog object never set the field. An explicit
+            // empty string (no arm) still clears the descriptor default.
+            if (catalog.ArmCmdMode != null) target.ArmCmdMode = catalog.ArmCmdMode;
+            if (catalog.PolicyEnable != null) target.PolicyEnable = catalog.PolicyEnable;
+            if (catalog.PolicyTask != null) target.PolicyTask = catalog.PolicyTask;
+            if (catalog.PolicyLoad != null) target.PolicyLoad = catalog.PolicyLoad;
+            if (catalog.PolicyModels != null) target.PolicyModels = catalog.PolicyModels;
+            if (catalog.PolicyCmdVel != null) target.PolicyCmdVel = catalog.PolicyCmdVel;
+            if (catalog.AiStatus != null) target.AiStatus = catalog.AiStatus;
+        }
+
+        /// <summary>
+        /// Policy topics are not in the latched descriptor. An armed robot still
+        /// gets the catalog names; a same-robot catalog copy can replace them.
+        /// AiStatus stays set even when the robot has no arm.
+        /// </summary>
+        private static void ApplyPolicyTopics(RobotTopics topics, bool hasArm)
+        {
+            if (topics == null) return;
+            if (hasArm)
+            {
+                topics.ArmCmdMode = "/arm/cmd_mode";
+                topics.PolicyEnable = "/policy/enable";
+                topics.PolicyTask = "/policy/task";
+                topics.PolicyLoad = "/policy/load";
+                topics.PolicyModels = "/policy/models";
+                topics.PolicyCmdVel = "/cmd_vel/vla";
+            }
+
+            topics.AiStatus = "/ai/status";
+            if (string.IsNullOrEmpty(topics.ControlModeActive))
+                topics.ControlModeActive = "/control_mode/active";
         }
 
         private static string[] CloneFields(string[] fields)
