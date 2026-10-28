@@ -1,6 +1,6 @@
 using System;
 using UnityEngine;
-using OmniBot.VR.Descriptor;
+using LatchedRobotDescriptor = OmniBot.VR.Descriptor.RobotDescriptor;
 
 namespace OmniBot.VR.Core
 {
@@ -44,10 +44,10 @@ namespace OmniBot.VR.Core
         public event Action<string> OnRobotIpChanged;
 
         /// <summary>Last descriptor that parsed. Null when disconnected or the document was rejected.</summary>
-        public RobotDescriptor LatestDescriptor { get; private set; }
+        public LatchedRobotDescriptor LatestDescriptor { get; private set; }
 
         /// <summary>Fires when a latched /ohho/descriptor message parses. Invalid documents are ignored.</summary>
-        public event Action<RobotDescriptor> OnRobotDescriptor;
+        public event Action<LatchedRobotDescriptor> OnRobotDescriptor;
 
         private Action<string> _onDescriptorMessage;
 
@@ -137,7 +137,7 @@ namespace OmniBot.VR.Core
             if (_onDescriptorMessage == null)
                 _onDescriptorMessage = OnDescriptorMessage;
             ROSBridgeClient.Instance.Subscribe(
-                RobotDescriptor.Topic, RobotDescriptor.MessageType, _onDescriptorMessage);
+                LatchedRobotDescriptor.Topic, LatchedRobotDescriptor.MessageType, _onDescriptorMessage);
 
             OnConnectionStateChanged?.Invoke(true);
             OnRobotIpChanged?.Invoke(CurrentIp);
@@ -145,7 +145,7 @@ namespace OmniBot.VR.Core
 
         private void OnDescriptorMessage(string json)
         {
-            if (!RobotDescriptor.TryParse(json, out var descriptor, out var error))
+            if (!LatchedRobotDescriptor.TryParse(json, out var descriptor, out var error))
             {
                 Debug.LogWarning("[ConnectionManager] Rejected /ohho/descriptor: " + error);
                 return;

@@ -2,6 +2,7 @@
     "name": "OmniBot.VR.PlayModeTests",
     "rootNamespace": "OmniBot.VR.PlayModeTests",
     "references": [
+        "OmniBot.VR",
         "UnityEngine.TestRunner",
         "Unity.XR.Management"
     ],
