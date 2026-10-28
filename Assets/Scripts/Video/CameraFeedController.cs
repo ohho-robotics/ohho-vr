@@ -115,6 +115,14 @@ namespace OmniBot.VR.Video
             }
         }
 
+        /// <summary>Image topics from the profile. Empty when the descriptor lists none.</summary>
+        public static List<string> TopicsFor(RobotProfile profile)
+        {
+            if (profile?.Topics?.Images == null || profile.Topics.Images.Count == 0)
+                return new List<string>();
+            return profile.Topics.Images;
+        }
+
         /// <summary>
         /// Configure from the selected robot. Chase is the default when the
         /// active session is <see cref="SessionKind.Sim"/>. Session video URLs
@@ -135,8 +143,7 @@ namespace OmniBot.VR.Video
                 if (!string.IsNullOrEmpty(endpoint.Host)) host = endpoint.Host;
                 urls = endpoint.VideoUrls;
             }
-            IList<string> topics = null;
-            if (profile != null && profile.Topics != null) topics = profile.Topics.Images;
+            IList<string> topics = TopicsFor(profile);
             _plan = SimScreenPlan.Build(kind, topics, host, urls);
             _mainIndex = _plan.Views.Count == 0 ? 0 : _plan.DefaultIndex;
             _configured = true;
