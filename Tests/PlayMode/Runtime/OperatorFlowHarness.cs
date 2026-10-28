@@ -5,21 +5,24 @@ using System.Text;
 using OmniBot.VR.App;
 using OmniBot.VR.Control;
 using OmniBot.VR.Control.Drive;
+using OmniBot.VR.Control.Session;
 using OmniBot.VR.Core;
 using OmniBot.VR.Core.Platform;
 using OmniBot.VR.UI.Console;
 using OmniBot.VR.UI.Garage;
 using OmniBot.VR.UI.Selection;
+using OmniBot.VR.UI.Session;
 using UnityEngine;
 
 namespace OmniBot.VR.PlayMode
 {
     /// <summary>
     /// Drives the real headset flow against <see cref="FakeRobotLink"/>:
-    /// login stub, console, garage, add-robot picker, teleop, both-grips e-stop.
-    /// The stop stays latched until an explicit left-X re-arm. A grip release
-    /// does not clear it, and the base stays still until one grip (the deadman)
-    /// is held again. Supabase, rosbridge, and the Quest runtime are not contacted.
+    /// login stub, console, garage, add-robot picker, simulate on that link,
+    /// teleop, both-grips e-stop. The stop stays latched until an explicit left-X
+    /// re-arm. A grip release does not clear it, and the base stays still until
+    /// one grip (the deadman) is held again. Supabase, rosbridge, and the Quest
+    /// runtime are not contacted.
     /// </summary>
     public static class OperatorFlowHarness
     {
@@ -33,12 +36,21 @@ namespace OmniBot.VR.PlayMode
             var result = new OperatorFlowResult();
             var log = new StringBuilder();
             var prefs = PrefSnapshot.Capture();
+            var priorSession = ActiveSession.Current;
             GameObject root = null;
             try
             {
                 PlayerPrefs.SetInt("auto_connect", 0);
+                PlayerPrefs.SetString("robot_ip", EndpointAddresses.DefaultIp);
+                PlayerPrefs.SetInt("robot_port", EndpointAddresses.RosbridgePort);
+                LastRobotStore.ClearChoice("omnibot-pro");
+                LastRobotStore.ClearChoice("user-robot-ci");
+                PlayerPrefs.DeleteKey("ohho.last_session_kind");
+                PlayerPrefs.DeleteKey("ohho.last_robot_alias");
                 CalibrationManager.Reset("omnibot-pro");
                 PlayerPrefs.Save();
+                SessionCatalog.ResetSharedForTests();
+                ActiveSession.Clear();
 
                 IsolateScene();
                 root = BuildApp(out var app, out var console, out var garage, out var picker,
@@ -81,6 +93,14 @@ namespace OmniBot.VR.PlayMode
                 log.Append("picker=").Append(result.PickerNameShown).Append("; ");
 
                 Invoke(garage, "OnRobotSelected", FixtureOmniBot());
+                // Garage pick opens Simulate / Drive real. Local desktop keeps the
+                // fake link (SetLink(null) restores linkProvider) and does not dial.
+                var sessionPicker = root.GetComponentInChildren<SessionPickerPanel>(true);
+                if (sessionPicker == null)
+                    throw new System.InvalidOperationException("Garage pick did not open the session picker.");
+                Invoke(sessionPicker, "ConfirmLocal", new object[] { null });
+                log.Append("session=").Append(teleop.IsTeleopActive).Append("; ");
+
                 result.TeleopActive = teleop.IsTeleopActive;
                 result.TeleopPanelShown = teleopPanel.activeInHierarchy && !garagePanel.activeInHierarchy;
                 result.ProfileRobotId = teleop.Profile != null ? teleop.Profile.RobotId : "";
@@ -151,7 +171,10 @@ namespace OmniBot.VR.PlayMode
             }
             catch (System.Exception ex)
             {
-                log.Append(" exception=").Append(ex.GetType().Name).Append(": ").Append(ex.Message);
+                var reported = ex;
+                while (reported is System.Reflection.TargetInvocationException && reported.InnerException != null)
+                    reported = reported.InnerException;
+                log.Append(" exception=").Append(reported.GetType().Name).Append(": ").Append(reported.Message);
                 result.Detail = log.ToString();
                 throw new System.InvalidOperationException(result.Detail, ex);
             }
@@ -161,6 +184,8 @@ namespace OmniBot.VR.PlayMode
                 DestroyNamed("HandWorkspaceOrigin");
                 DestroyComponents<ConnectionManager>();
                 DestroyComponents<ROSBridgeClient>();
+                if (priorSession != null) ActiveSession.Set(priorSession);
+                else ActiveSession.Clear();
                 prefs.Restore();
             }
 
@@ -422,12 +447,18 @@ namespace OmniBot.VR.PlayMode
             {
                 var snap = new PrefSnapshot();
                 snap.CaptureInt("auto_connect");
+                snap.CaptureInt("robot_port");
+                snap.CaptureString("robot_ip");
                 snap.CaptureInt("ohho.has_last_robot");
                 snap.CaptureInt("ohho.last_robot_port");
                 snap.CaptureString("ohho.last_robot_id");
                 snap.CaptureString("ohho.last_robot_name");
                 snap.CaptureString("ohho.last_robot_ip");
+                snap.CaptureString("ohho.last_session_kind");
+                snap.CaptureString("ohho.last_robot_alias");
                 snap.CaptureString("ohho.calibration.omnibot-pro");
+                snap.CaptureChoice("omnibot-pro");
+                snap.CaptureChoice("user-robot-ci");
                 return snap;
             }
 
@@ -444,6 +475,23 @@ namespace OmniBot.VR.PlayMode
                     else PlayerPrefs.SetString(pair.Key, pair.Value.Value ?? "");
                 }
                 PlayerPrefs.Save();
+            }
+
+            void CaptureChoice(string robotId)
+            {
+                string prefix = "ohho.choice." + robotId + ".";
+                CaptureInt(prefix + "has");
+                CaptureInt(prefix + "port");
+                CaptureInt(prefix + "offline");
+                CaptureString(prefix + "kind");
+                CaptureString(prefix + "target");
+                CaptureString(prefix + "url");
+                CaptureString(prefix + "host");
+                CaptureString(prefix + "webrtc");
+                CaptureString(prefix + "label");
+                CaptureString(prefix + "sid");
+                CaptureString(prefix + "source");
+                CaptureString(prefix + "video");
             }
 
             void CaptureInt(string key)

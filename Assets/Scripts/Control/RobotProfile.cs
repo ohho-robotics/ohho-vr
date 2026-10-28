@@ -70,7 +70,8 @@ namespace OmniBot.VR.Control
         /// <summary>
         /// Safety: a grip must be held to drive. Releasing it publishes zero velocity.
         /// Defaults to true. The only opt-out is <see cref="DisableDeadmanForSimulation"/>,
-        /// and device player builds ignore that call.
+        /// and device player builds ignore that call. OHH-59 enforces this in the drive
+        /// loop; the session picker never turns it off for a real robot.
         /// </summary>
         public bool RequireDeadman
         {
@@ -107,6 +108,7 @@ namespace OmniBot.VR.Control
         /// <summary>
         /// Turn the deadman off for an editor or simulator session. Explicit on purpose:
         /// a new profile keeps the deadman required. No effect in a device player build.
+        /// The session picker does not call this for a real robot.
         /// </summary>
         public void DisableDeadmanForSimulation()
         {
