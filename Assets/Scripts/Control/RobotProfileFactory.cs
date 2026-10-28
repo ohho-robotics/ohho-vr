@@ -257,6 +257,7 @@ namespace OmniBot.VR.Control
                 BaseActionLabels = spec.ActionLabels,
                 MaxLinVel = maxLinVel,
                 MaxAngVel = maxAngVel,
+                RequireDeadman = true,
                 HasArm = hasArm,
                 ArmDof = armDof,
                 Joints = joints,
