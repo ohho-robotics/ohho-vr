@@ -1,4 +1,5 @@
 using System;
+using System.Threading.Tasks;
 using UnityEngine;
 using LatchedRobotDescriptor = OmniBot.VR.Descriptor.RobotDescriptor;
 
@@ -13,6 +14,8 @@ namespace OmniBot.VR.Core
     {
         // ── Singleton ────────────────────────────────────────────────────────
         private static ConnectionManager _instance;
+        public static bool HasInstance => _instance != null;
+
         public static ConnectionManager Instance
         {
             get
@@ -103,12 +106,39 @@ namespace OmniBot.VR.Core
             ROSBridgeClient.Instance.Connect(url);
         }
 
+        /// <summary>
+        /// Connects to a session endpoint. Keeps <see cref="Connect"/> for manual
+        /// IP entry; cloud targets can pass a full <c>wss://</c> URL.
+        /// </summary>
+        public void ConnectEndpoint(OmniBot.VR.Control.Session.RobotEndpoint endpoint)
+        {
+            if (endpoint == null || endpoint.Offline || string.IsNullOrEmpty(endpoint.RosbridgeUrl))
+                return;
+            if (!string.IsNullOrEmpty(endpoint.Host)) CurrentIp = endpoint.Host;
+            if (endpoint.Port > 0) CurrentPort = endpoint.Port;
+            Debug.Log($"[ConnectionManager] Connecting to {endpoint.RosbridgeUrl}");
+            ROSBridgeClient.Instance.Connect(endpoint.RosbridgeUrl);
+        }
+
         /// <summary>Unsubscribes from all topics, then disconnects cleanly.</summary>
         public void Disconnect()
         {
-            ROSBridgeClient.Instance.UnsubscribeAll();
+            _ = DisconnectAsync();
+        }
+
+        /// <summary>
+        /// Unsubscribes, then closes the socket. Callers that are about to open
+        /// another session must await this so the previous socket is gone first.
+        /// </summary>
+        public async Task DisconnectAsync()
+        {
+            var client = ROSBridgeClient.Instance;
+            if (client != null)
+            {
+                client.UnsubscribeAll();
+                await client.DisconnectAsync();
+            }
             LatestDescriptor = null;
-            ROSBridgeClient.Instance.Disconnect();
         }
 
         /// <summary>Saves auto-connect preference to PlayerPrefs.</summary>
