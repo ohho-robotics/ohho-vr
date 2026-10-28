@@ -142,6 +142,7 @@ namespace OmniBot.VR.UI
             }
 
             RefreshRobotLabel();
+            ApplyHudRows();
             OnConnectionState(conn != null && conn.IsConnected);
             RefreshRecordingUi();
         }
@@ -173,6 +174,7 @@ namespace OmniBot.VR.UI
 
         private void OnTeleopStarted(RobotProfile profile)
         {
+            ApplyHudRows();
             _profileBound = false;
             EnsureSubscriptions();
             RefreshRobotLabel();
@@ -246,6 +248,23 @@ namespace OmniBot.VR.UI
             RefreshTelemetryUi();
         }
 
+        private void ApplyHudRows()
+        {
+            var profile = _teleop != null ? _teleop.Profile : null;
+            if (profile == null) return;
+            var rows = TeleopHudPlan.Rows(profile);
+            SetRowActive(poseText, TeleopHudPlan.Has(rows, TeleopHudPlan.Pose));
+            SetRowActive(velocityText, TeleopHudPlan.Has(rows, TeleopHudPlan.Velocity));
+            SetRowActive(armText,
+                TeleopHudPlan.Has(rows, TeleopHudPlan.Arm) || TeleopHudPlan.Has(rows, TeleopHudPlan.Gripper));
+            SetRowActive(modeText, TeleopHudPlan.Has(rows, TeleopHudPlan.Mode));
+        }
+
+        private static void SetRowActive(TMP_Text text, bool active)
+        {
+            if (text != null) text.gameObject.SetActive(active);
+        }
+
         private void EnsureSubscriptions()
         {
             var ros = ROSBridgeClient.Instance;
@@ -271,7 +290,10 @@ namespace OmniBot.VR.UI
         {
             DropProfileSubs(ros);
             RobotTopics topics = profile != null ? profile.Topics : null;
-            string odom = topics != null && !string.IsNullOrEmpty(topics.Odom) ? topics.Odom : CatalogOdom;
+            bool baseDrive = profile != null && profile.BaseDof > 0;
+            string odom = topics != null && !string.IsNullOrEmpty(topics.Odom)
+                ? topics.Odom
+                : (baseDrive ? CatalogOdom : "");
             string imu = topics != null && !string.IsNullOrEmpty(topics.Imu) ? topics.Imu : CatalogImu;
             string joints = topics != null && !string.IsNullOrEmpty(topics.JointStates) ? topics.JointStates : CatalogJointStates;
             SubProfile(ros, odom, "nav_msgs/Odometry", OnOdom);
