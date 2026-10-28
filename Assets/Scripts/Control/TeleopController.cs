@@ -263,6 +263,23 @@ namespace OmniBot.VR.Control
         /// <summary>Whether a robot is currently being teleoperated.</summary>
         public bool IsTeleopActive => _teleopActive;
 
+        /// <summary>
+        /// Use this transport for the next session. Null restores the ROSBridge link.
+        /// The in-headset demo passes an <see cref="OfflineKinematicLink"/>, which
+        /// never opens a socket to a real robot.
+        /// </summary>
+        public void SetLink(IRobotLink link)
+        {
+            _link = link ?? ResolveLink();
+        }
+
+        /// <summary>
+        /// True when commands go out through <see cref="RosBridgeLink"/>.
+        /// An assigned transport such as the play-mode fake link is false, so a
+        /// session must not also open a rosbridge socket.
+        /// </summary>
+        public bool PublishesViaRosBridge => (_link ?? ResolveLink()) is RosBridgeLink;
+
         private void EnsureWorkspaceOrigin(RobotProfile profile)
         {
             if (handWorkspaceOrigin != null || profile == null) return;
