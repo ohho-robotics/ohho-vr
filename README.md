@@ -83,11 +83,11 @@ CI job `build-android` in `.github/workflows/unity-tests.yml` runs that same met
 
 ## 4. Edit-mode tests
 
-The NUnit fixtures are in `Assets/Scripts/Editor/Tests/` (namespace `OmniBot.VR.Tests`). Of the earlier fixtures, 39 are 13 drive-spec, 11 control-scheme factory, 9 calibration, and 6 Fabrik IK. This branch adds the operator-rules acknowledgement fixtures in that same folder. Main adds the session-picker fixtures. Feature fixtures under `Assets/Scripts/Detection/Editor/` and `Assets/Scripts/AR/Editor/` use that same namespace and the same `OmniBot.VR.Tests` filter. CI skips the Unity steps until the Unity licence secrets are set. Run them locally in batch mode.
+The NUnit fixtures are in `Assets/Scripts/Editor/Tests/` (namespace `OmniBot.VR.Tests`). Of the earlier fixtures, 39 are 13 drive-spec, 11 control-scheme factory, 9 calibration, and 6 Fabrik IK. This branch adds the Nav2 goal fixtures. Main adds the operator-rules acknowledgement fixtures and the session-picker fixtures. Feature fixtures under `Assets/Scripts/Detection/Editor/` and `Assets/Scripts/AR/Editor/` use that same namespace and the same `OmniBot.VR.Tests` filter. CI skips the Unity steps until the Unity licence secrets are set. Run them locally in batch mode.
 
 CI runs these edit-mode tests with GameCI (`.github/workflows/unity-tests.yml`) once three repository secrets are set at Settings → Secrets and variables → Actions (https://github.com/ohho-robotics/OhhO-VR/settings/secrets/actions): `UNITY_LICENSE` (the full contents of a Unity personal licence `.ulf` file, e.g. `C:\ProgramData\Unity\Unity_lic.ulf` on Windows), `UNITY_EMAIL` and `UNITY_PASSWORD` (the Unity ID account that owns that licence). Until they are set the workflow skips the Unity steps and passes. When the secrets are set, `scripts/check-editmode-results.py` reads `test-results/editmode-results.xml` (artifact name `editmode-test-results`) and fails the job if that file is missing or reports zero executed tests (passed + failed + inconclusive = 0). The counts are written to the job summary.
 
-Confirmed from the latest green run before this gate, [Unity tests run 38548684961](https://github.com/ohho-robotics/OhhO-VR/actions/runs/38548684961) (pull request 6, commit `458d2a8`, 14 Oct 2026): GameCI's Test Results check parsed `editmode-results.xml` as **53 passed / 53 total** in 0.211s. That checkout added teleop fixtures on top of the 39 tests above. The artifact zip itself is not anonymously downloadable; the check is produced from that XML. A green run of the fixtures in this checkout must show an executed count greater than zero. `OmniBot.VR.Tests` in this checkout includes the 39 drive, scheme, calibration, and IK fixtures, the operator-rules acknowledgement fixtures, the session-picker fixtures, and the Detection, AR, AprilTag, telemetry, SLAM, signaling, sim-link, and twin fixtures when the runner discovers them (273 `[Test]` or `[UnityTest]` methods outside `Assets/Tests/PlayMode`, plus 2 play-mode methods).
+Confirmed from the latest green run before this gate, [Unity tests run 38548684961](https://github.com/ohho-robotics/OhhO-VR/actions/runs/38548684961) (pull request 6, commit `458d2a8`, 14 Oct 2026): GameCI's Test Results check parsed `editmode-results.xml` as **53 passed / 53 total** in 0.211s. That checkout added teleop fixtures on top of the 39 tests above. The artifact zip itself is not anonymously downloadable; the check is produced from that XML. A green run of the fixtures in this checkout must show an executed count greater than zero. `OmniBot.VR.Tests` in this checkout includes the 39 drive, scheme, calibration, and IK fixtures, the Nav2 goal fixtures, the operator-rules acknowledgement fixtures, the session-picker fixtures, and the Detection, AR, AprilTag, telemetry, SLAM, signaling, sim-link, and twin fixtures when the runner discovers them (273 `[Test]` or `[UnityTest]` methods outside `Assets/Tests/PlayMode` on main before these Nav2 fixtures, plus 2 play-mode methods).
 
 Windows:
 
@@ -162,6 +162,14 @@ Assigning an `InHeadsetSimHost` to `TeleopController.linkProvider` is the same c
 | **Both grips simultaneously** | Publishes `/emergency_stop` true and stops new twists. Does not publish a zero twist. Release publishes false. Held means stop, release means clear. Not a hardware e-stop — [docs/safety.md](docs/safety.md) |
 | Left controller B | Hide / show the OhhO Screen |
 | Right thumbstick press | Cycle camera feed |
+
+### Navigation (Nav2)
+
+The teleop page lists named waypoints and shows the occupancy grid from `/map`. Choosing a waypoint, or tapping the map, sends `navigate_to_pose` and sets `/control_mode` to `nav2`. The same panel shows `/plan`, the goal status, and the ETA from the action feedback. **Cancel** publishes `/mission/cancel` and cancels that action.
+
+Waypoint names come from `/ohho/nav/list_waypoints`, the rosapi params `/ohho/waypoints` and `/waypoints`, or the `/ohho/waypoints` topic. Until one of those answers, the list is the apartment contract (`kitchen`, `desk`, `door`, `home`).
+
+A real robot (`kind=real`, or any garage robot that is not `simulated`) stays in teleop when the sticks go idle. Nav2 starts only from the **Nav2** button or a goal. A simulated robot still returns to `nav2` after 0.5 s idle. Any thumbstick outside the dead zone while Nav2 is active cancels the goal and returns to teleop. Emergency stop is unchanged.
 
 ### Hand Tracking Arm Control
 

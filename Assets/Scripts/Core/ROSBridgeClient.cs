@@ -44,6 +44,11 @@ namespace OmniBot.VR.Core
         public event Action OnDisconnected;
         public event Action<string> OnError;
 
+        /// <summary>Non-publish rosbridge frames (action feedback/result, service responses).</summary>
+        public event Action<string> OnProtocolMessage;
+
+        private readonly RosbridgeFragmentBuffer _fragments = new RosbridgeFragmentBuffer();
+
         // ── Private fields ───────────────────────────────────────────────────
         private WebSocket _socket;
         private readonly ConcurrentQueue<(string topic, string json)> _incomingQueue
@@ -153,6 +158,9 @@ namespace OmniBot.VR.Core
             var msg = new ROSAdvertiseMessage(topic, type);
             SendJson(JsonConvert.SerializeObject(msg));
         }
+
+        /// <summary>Sends a raw rosbridge frame (action goal, service call, cancel).</summary>
+        public void SendRaw(string json) => SendJson(json);
 
         /// <summary>
         /// Fired after a message has been handed to the socket. Not fired when the
@@ -409,6 +417,14 @@ namespace OmniBot.VR.Core
             _incomingQueue.Enqueue(("__error__", errorMsg));
         }
 
+        private static int FragmentCount(JToken token)
+        {
+            if (token == null) return -1;
+            if (token.Type == JTokenType.Integer || token.Type == JTokenType.Float)
+                return token.Value<int>();
+            return int.TryParse(token.ToString(), out var value) ? value : -1;
+        }
+
         private void HandleMessage(byte[] data)
         {
             string json = System.Text.Encoding.UTF8.GetString(data);
@@ -416,14 +432,36 @@ namespace OmniBot.VR.Core
             {
                 JObject root = JObject.Parse(json);
                 string op = root["op"]?.ToString();
+                if (op == "fragment")
+                {
+                    string id = root["id"]?.ToString();
+                    int num = FragmentCount(root["num"]);
+                    int total = FragmentCount(root["total"]);
+                    string piece = root["data"]?.Type == JTokenType.String ? root["data"].ToString() : null;
+                    string full;
+                    lock (_fragments)
+                        full = piece == null ? null : _fragments.Push(id, num, total, piece);
+                    if (string.IsNullOrEmpty(full)) return;
+                    json = full;
+                    root = JObject.Parse(json);
+                    op = root["op"]?.ToString();
+                }
+                // Pending CallService results feed connection preflight. Unmatched
+                // service responses stay on the protocol event so Nav2 can read them.
                 if (op == "service_response" || (op == "status" && IsPendingCall(root)))
                 {
                     _incomingQueue.Enqueue(("__service__", json));
+                    if (op == "service_response" && !IsPendingCall(root))
+                        _incomingQueue.Enqueue(("__protocol__", json));
                     return;
                 }
-                if (!RosbridgeIncoming.TryExtractPublish(json, out string topic, out string msgJson))
+                if (RosbridgeIncoming.TryExtractPublish(json, out string topic, out string msgJson))
+                {
+                    _incomingQueue.Enqueue((topic, msgJson));
                     return;
-                _incomingQueue.Enqueue((topic, msgJson));
+                }
+                if (!string.IsNullOrEmpty(op) && op != "publish" && op != "fragment")
+                    _incomingQueue.Enqueue(("__protocol__", json));
             }
             catch (Exception ex)
             {
@@ -454,6 +492,11 @@ namespace OmniBot.VR.Core
             if (topic == "__service__")
             {
                 DispatchService(json);
+                return;
+            }
+            if (topic == "__protocol__")
+            {
+                OnProtocolMessage?.Invoke(json);
                 return;
             }
 
