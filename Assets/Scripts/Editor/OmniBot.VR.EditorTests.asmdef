@@ -3,6 +3,7 @@
     "rootNamespace": "OmniBot.VR.Tests",
     "references": [
         "OmniBot.VR",
+        "OmniBot.VR.AprilTagSpike",
         "Ohho.TelemetryHud",
         "UnityEngine.TestRunner",
         "UnityEditor.TestRunner"
