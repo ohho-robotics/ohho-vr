@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using OmniBot.VR.Control.Safety;
 using OmniBot.VR.Core;
 using UnityEngine;
 
@@ -70,6 +71,7 @@ namespace OmniBot.VR.Control
         SimVelocity _applied;
         double _simTime;
         bool _zeroAlreadySent = true;
+        bool _estopAsserted;
         uint _seq;
 
         public bool IsConnected { get; private set; }
@@ -118,6 +120,7 @@ namespace OmniBot.VR.Control
             IsConnected = true;
             DeadmanHeld = false;
             EstopLatched = false;
+            _estopAsserted = false;
             ArmEnabled = false;
             LastControlMode = "";
             _applied = SimVelocity.Zero;
@@ -257,6 +260,7 @@ namespace OmniBot.VR.Control
             {
                 if (IsEstop(topic))
                 {
+                    _estopAsserted = flag.data;
                     if (flag.data) EmergencyStop();
                     else ReleaseStop();
                     Notify(topic, WithKind(flag));
@@ -303,6 +307,37 @@ namespace OmniBot.VR.Control
         public void Unsubscribe(string topic)
         {
             if (!string.IsNullOrEmpty(topic)) _subscribers.Remove(topic);
+        }
+
+        /// <summary>
+        /// <c>/ohho/estop_reset</c> (<c>std_srvs/Trigger</c>). Refuses while
+        /// <c>/emergency_stop</c> is still true. Otherwise clears the sim latch.
+        /// The callback bool is <c>values.success</c>, matching rosbridge.
+        /// </summary>
+        public void CallService(string service, string type, Action<bool, string> onResponse)
+        {
+            if (!IsConnected)
+            {
+                CompleteService(onResponse, false, "");
+                return;
+            }
+
+            bool reset = string.Equals(service, OhhoSafetyContract.EstopResetService, StringComparison.Ordinal)
+                         && string.Equals(type, OhhoSafetyContract.EstopResetType, StringComparison.Ordinal);
+            if (!reset)
+            {
+                CompleteService(onResponse, false, "");
+                return;
+            }
+
+            if (_estopAsserted)
+            {
+                CompleteService(onResponse, false, TriggerValues(false, "stop still asserted"));
+                return;
+            }
+
+            ReleaseStop();
+            CompleteService(onResponse, true, TriggerValues(true, ""));
         }
 
         void ConfigureJoints(RobotProfile profile)
@@ -541,6 +576,26 @@ namespace OmniBot.VR.Control
                 nsecs = 0;
             }
             return new TimeMsg(secs, nsecs);
+        }
+
+        static void CompleteService(Action<bool, string> onResponse, bool ok, string values)
+        {
+            if (onResponse == null) return;
+            try { onResponse(ok, values ?? ""); }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[SimulatedRobotLink] Service callback failed: {ex.Message}");
+            }
+        }
+
+        static string TriggerValues(bool success, string message)
+        {
+            var values = new JObject
+            {
+                ["success"] = success,
+                ["message"] = message ?? "",
+            };
+            return values.ToString(Formatting.None);
         }
 
         static string WithKind(object msg)

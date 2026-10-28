@@ -607,6 +607,10 @@ namespace OmniBot.VR.Tests
                 UnsubscribeCalls++;
             }
 
+            public void CallService(string service, string type, Action<bool, string> onResponse)
+            {
+            }
+
             public sealed class Subscription
             {
                 public string Type;

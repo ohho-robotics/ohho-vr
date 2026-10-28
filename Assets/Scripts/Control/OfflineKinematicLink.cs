@@ -39,5 +39,14 @@ namespace OmniBot.VR.Control
         {
             if (!string.IsNullOrEmpty(topic)) _subscribers.Remove(topic);
         }
+
+        /// <summary>
+        /// There is no robot service on this link. The callback runs immediately
+        /// with a failed outcome and empty values.
+        /// </summary>
+        public void CallService(string service, string type, Action<bool, string> onResponse)
+        {
+            onResponse?.Invoke(false, "");
+        }
     }
 }

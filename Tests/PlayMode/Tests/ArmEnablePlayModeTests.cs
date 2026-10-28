@@ -108,6 +108,7 @@ namespace OmniBot.VR.PlayModeTests
             public void Publish<T>(string topic, T msg) => _messages.Add(msg);
             public void Subscribe(string topic, string type, System.Action<string> callback) { }
             public void Unsubscribe(string topic) { }
+            public void CallService(string service, string type, System.Action<bool, string> onResponse) { }
 
             public int Count<T>() where T : class
             {

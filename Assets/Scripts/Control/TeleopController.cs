@@ -8,6 +8,7 @@ using OmniBot.VR.Video;
 using OmniBot.VR.Recording;
 using OmniBot.VR.Control.Drive;
 using OmniBot.VR.Control.Manip;
+using OmniBot.VR.Control.Safety;
 
 namespace OmniBot.VR.Control
 {
@@ -64,6 +65,14 @@ namespace OmniBot.VR.Control
         private IDriveScheme _drive;
         private IManipulationScheme _manip;
         private bool _teleopActive;
+        private readonly TeleopSafetySession _safety = new TeleopSafetySession();
+        private bool _hmdMounted = true;
+        private bool _appPaused;
+        private bool _appFocused = true;
+        private bool _inputFocused = true;
+
+        /// <summary>Heartbeat, safety latch, and post-reconnect deadman hold.</summary>
+        public TeleopSafetySession Safety => _safety;
 
         /// <summary>One-line drive control hint (for onboarding / HUD).</summary>
         public string DriveHint => _drive?.HudHint ?? "No drive on this robot";
@@ -84,24 +93,80 @@ namespace OmniBot.VR.Control
 
         // ── Previous both-grips state for edge detection ─────────────────────────
         private bool _prevBothGrips;
+        private TeleopInput _lastInput;
 
         // ── Unity lifecycle ──────────────────────────────────────────────────────
         private void OnEnable()
         {
             var conn = ConnectionManager.Instance;
             if (conn != null) conn.OnConnectionStateChanged += OnConnectionChanged;
+            OVRManager.HMDUnmounted += OnHmdUnmounted;
+            OVRManager.HMDMounted += OnHmdMounted;
+            OVRManager.InputFocusLost += OnInputFocusLost;
+            OVRManager.InputFocusAcquired += OnInputFocusAcquired;
         }
 
         private void OnDisable()
         {
             var conn = ConnectionManager.Instance;
             if (conn != null) conn.OnConnectionStateChanged -= OnConnectionChanged;
+            OVRManager.HMDUnmounted -= OnHmdUnmounted;
+            OVRManager.HMDMounted -= OnHmdMounted;
+            OVRManager.InputFocusLost -= OnInputFocusLost;
+            OVRManager.InputFocusAcquired -= OnInputFocusAcquired;
         }
 
         private void Start()
         {
             if (gestureDetector == null)
                 gestureDetector = FindObjectOfType<GestureDetector>();
+        }
+
+        private void OnApplicationPause(bool paused)
+        {
+            _appPaused = paused;
+            PushPresence(paused ? "app pause" : "app resume");
+        }
+
+        private void OnApplicationFocus(bool focused)
+        {
+            _appFocused = focused;
+            PushPresence(focused ? "focus acquired" : "focus lost");
+        }
+
+        private void OnHmdUnmounted()
+        {
+            _hmdMounted = false;
+            PushPresence("hmd unmounted");
+        }
+
+        private void OnHmdMounted()
+        {
+            _hmdMounted = true;
+            PushPresence("hmd mounted");
+        }
+
+        private void OnInputFocusLost()
+        {
+            _inputFocused = false;
+            PushPresence("focus lost");
+        }
+
+        private void OnInputFocusAcquired()
+        {
+            _inputFocused = true;
+            PushPresence("focus acquired");
+        }
+
+        private void PushPresence(string reason)
+        {
+            bool present = _hmdMounted && !_appPaused && _appFocused && _inputFocused;
+            IRobotLink link = _teleopActive ? Link : null;
+            if (_safety.SetOperatorPresent(present, reason, link) && link != null && link.IsConnected)
+            {
+                _drive?.Stop(link);
+                _manip?.Stop(link);
+            }
         }
 
         private void OnConnectionChanged(bool connected)
@@ -114,9 +179,17 @@ namespace OmniBot.VR.Control
 
         private void Update()
         {
-            if (!_teleopActive || !Link.IsConnected) return;
+            if (!_teleopActive) return;
 
-            // ── Build the controller input snapshot ──────────────────────────────
+            var input = ReadInput();
+            _lastInput = input;
+            _safety.Tick(Link, ref input, _drive, _manip, TickManipulation);
+            if (_safety.ConsumeLinkRestored())
+                AdvertiseTopics(Profile);
+        }
+
+        private TeleopInput ReadInput()
+        {
             Vector2 leftStick = OVRInput.Get(OVRInput.Axis2D.PrimaryThumbstick, OVRInput.Controller.LTouch);
             Vector2 rightStick = OVRInput.Get(OVRInput.Axis2D.SecondaryThumbstick, OVRInput.Controller.RTouch);
 
@@ -138,60 +211,59 @@ namespace OmniBot.VR.Control
                 DeltaTime = Time.deltaTime,
             };
             _prevBothGrips = bothGrips;
+            return input;
+        }
 
-            // ── Drive ────────────────────────────────────────────────────────────
-            if (_drive != null)
-                _drive.Tick(ref input, Link);
+        private void TickManipulation()
+        {
+            if (_manip == null) return;
 
-            // ── Manipulation (hand poses) ────────────────────────────────────────
             // Runs without a GestureDetector so controller jog and the enable
-            // button still work when hand tracking is absent.
-            if (_manip != null)
+            // button still work when hand tracking is absent. The safety session
+            // only calls this while motion is allowed.
+            HandPose rightHand = default;
+            HandPose leftHand = default;
+            bool trackingGood = false;
+            if (gestureDetector != null)
             {
-                HandPose rightHand = default;
-                HandPose leftHand = default;
-                bool trackingGood = false;
-                if (gestureDetector != null)
-                {
-                    rightHand = BuildHandPose(gestureDetector.rightHand);
-                    leftHand = BuildHandPose(gestureDetector.leftHand);
-                    trackingGood = rightHand.Quality == HandTrackingQuality.Good;
-                    TickThumbsUpToggle(gestureDetector.leftHand);
-                }
-
-                bool clutch = OVRInput.Get(OVRInput.Axis1D.SecondaryIndexTrigger, OVRInput.Controller.RTouch) >= ClutchTriggerThreshold
-                    || OVRInput.Get(OVRInput.Button.SecondaryIndexTrigger, OVRInput.Controller.RTouch);
-                bool xDown = OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.LTouch);
-                bool cycleJoint = OVRInput.GetDown(OVRInput.Button.PrimaryThumbstick, OVRInput.Controller.LTouch);
-                bool thumbsPulse = _thumbsUpPulse;
-                _thumbsUpPulse = false;
-
-                var armInput = new ArmOperatorInput
-                {
-                    ClutchHeld = clutch,
-                    TrackingGood = trackingGood,
-                    JogAxis = rightStick.y,
-                    CycleJointPressed = cycleJoint,
-                    EmergencyStop = bothGrips,
-                    DeltaTime = Time.deltaTime,
-                };
-                // Left X confirms a pending REAL enable. A thumbs-up never does.
-                // Either control disarms immediately, and either requests enable
-                // when the arm is off. One press cannot both request and confirm.
-                var phase = _manip.EnablePhase;
-                if (phase == ArmEnablePhase.AwaitingRealConfirmation && xDown)
-                    armInput.ConfirmRequested = true;
-                else if (phase == ArmEnablePhase.Armed && (xDown || thumbsPulse))
-                    armInput.DisarmRequested = true;
-                else if (phase == ArmEnablePhase.Off && (xDown || thumbsPulse))
-                    armInput.EnableRequested = true;
-
-                _manip.FeedArmInput(armInput);
-                _manip.Tick(ref rightHand, ref leftHand, Link);
-
-                if (_workspaceVisual != null)
-                    _workspaceVisual.SetAppearance(_manip.EnablePhase, _manip.ClutchEngaged, trackingGood);
+                rightHand = BuildHandPose(gestureDetector.rightHand);
+                leftHand = BuildHandPose(gestureDetector.leftHand);
+                trackingGood = rightHand.Quality == HandTrackingQuality.Good;
+                TickThumbsUpToggle(gestureDetector.leftHand);
             }
+
+            bool clutch = OVRInput.Get(OVRInput.Axis1D.SecondaryIndexTrigger, OVRInput.Controller.RTouch) >= ClutchTriggerThreshold
+                || OVRInput.Get(OVRInput.Button.SecondaryIndexTrigger, OVRInput.Controller.RTouch);
+            bool xDown = OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.LTouch);
+            bool cycleJoint = OVRInput.GetDown(OVRInput.Button.PrimaryThumbstick, OVRInput.Controller.LTouch);
+            bool thumbsPulse = _thumbsUpPulse;
+            _thumbsUpPulse = false;
+
+            var armInput = new ArmOperatorInput
+            {
+                ClutchHeld = clutch,
+                TrackingGood = trackingGood,
+                JogAxis = _lastInput.RightStick.y,
+                CycleJointPressed = cycleJoint,
+                EmergencyStop = _lastInput.BothGrips,
+                DeltaTime = _lastInput.DeltaTime,
+            };
+            // Left X confirms a pending REAL enable. A thumbs-up never does.
+            // Either control disarms immediately, and either requests enable
+            // when the arm is off. One press cannot both request and confirm.
+            var phase = _manip.EnablePhase;
+            if (phase == ArmEnablePhase.AwaitingRealConfirmation && xDown)
+                armInput.ConfirmRequested = true;
+            else if (phase == ArmEnablePhase.Armed && (xDown || thumbsPulse))
+                armInput.DisarmRequested = true;
+            else if (phase == ArmEnablePhase.Off && (xDown || thumbsPulse))
+                armInput.EnableRequested = true;
+
+            _manip.FeedArmInput(armInput);
+            _manip.Tick(ref rightHand, ref leftHand, Link);
+
+            if (_workspaceVisual != null)
+                _workspaceVisual.SetAppearance(_manip.EnablePhase, _manip.ClutchEngaged, trackingGood);
         }
 
         private bool _thumbsUpPulse;
@@ -228,6 +300,8 @@ namespace OmniBot.VR.Control
 
             AdvertiseTopics(profile);
             _teleopActive = true;
+            PushPresence("session start");
+            _safety.Start(Link);
             ConfigureSurfaces(profile);
 
             Debug.Log($"[TeleopController] Teleop started — {profile.Name} ({profile.Drive}, arm {(profile.HasArm ? $"{profile.ArmDof}-DOF" : "none")}), IK={profile.IkLocation}.");
@@ -248,12 +322,13 @@ namespace OmniBot.VR.Control
         public void StopTeleop()
         {
             if (!_teleopActive && _drive == null && _manip == null) return;
+            _teleopActive = false;
+            _safety.Stop(Link);
             _drive?.Stop(Link);
             _manip?.Stop(Link);
             _drive = null;
             _manip = null;
             Profile = null;
-            _teleopActive = false;
             _wasThumbsUp = false;
             _thumbsUpHoldTimer = 0f;
             _thumbsUpPulse = false;
@@ -273,6 +348,12 @@ namespace OmniBot.VR.Control
 
         /// <summary>Whether a robot is currently being teleoperated.</summary>
         public bool IsTeleopActive => _teleopActive;
+
+        /// <summary>First tap arms the confirm. Second tap calls <c>/ohho/estop_reset</c>.</summary>
+        public void RequestEstopReset() => _safety.RequestEstopReset();
+
+        /// <summary>Confirm the HUD e-stop reset and call the robot service.</summary>
+        public bool ConfirmEstopReset() => _safety.ConfirmEstopReset(Link);
 
         /// <summary>
         /// Use this transport for the next session. Null restores the ROSBridge link.
