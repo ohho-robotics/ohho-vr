@@ -126,8 +126,12 @@ One persistent GameObject holding the platform services (each is a singleton):
    - **Base:** left stick strafe (vx/vy), right stick X yaw, hold one grip to
      drive (deadman, on by default), right grip turbo clamped to 0.2 m/s,
      both grips latched e-stop (left X resets; releasing the grips does not).
-   - **Arm:** right-hand pose → IK → `/arm/joint_commands/teleop` @ 20 Hz; pinch →
-     gripper; left-hand thumbs-up (hold 0.5 s) toggles arm enable.
+   - **Arm:** Left X requests enable (a real robot needs a second Left X
+     before `/arm/enable`). A left-hand thumbs-up (hold 0.5 s) requests enable
+     or turns the arm off and never confirms a real robot. Hold the right index
+     trigger to move — the first command is the pose already held, then the
+     right-hand pose drives IK to `/arm/joint_commands/teleop` @ 20 Hz. Pinch
+     closes the gripper. Poor hand tracking jogs one joint with right stick Y.
    - All topics, joint names and limits come from the profile (OmniBot = SO-101
      6-DOF + mecanum, identical to the old hardcoded constants).
 

@@ -75,13 +75,25 @@ namespace OmniBot.VR.Tests
         }
 
         [Test]
-        public void ApplyTo_VelocityOverride_WhenPositive_Overrides()
+        public void ApplyTo_VelocityOverride_AboveCap_DoesNotRaise()
         {
-            var profile = new RobotProfile { MaxLinVel = 0.2f, MaxAngVel = 1.0f };
+            var profile = new RobotProfile { MaxLinVel = 0.2f, MaxAngVel = 1.0f, MaxLatVel = 0.2f };
             var cal = new RobotCalibration { maxLinVelOverride = 0.5f, maxAngVelOverride = 2.0f };
             CalibrationManager.ApplyTo(profile, cal);
-            Assert.AreEqual(0.5f, profile.MaxLinVel);
-            Assert.AreEqual(2.0f, profile.MaxAngVel);
+            Assert.AreEqual(0.2f, profile.MaxLinVel);
+            Assert.AreEqual(1.0f, profile.MaxAngVel);
+            Assert.LessOrEqual(profile.MaxLatVel, 0.2f);
+        }
+
+        [Test]
+        public void ApplyTo_VelocityOverride_BelowCap_Lowers()
+        {
+            var profile = new RobotProfile { MaxLinVel = 0.2f, MaxAngVel = 1.0f, MaxLatVel = 0.2f };
+            var cal = new RobotCalibration { maxLinVelOverride = 0.05f, maxAngVelOverride = 0.4f };
+            CalibrationManager.ApplyTo(profile, cal);
+            Assert.AreEqual(0.05f, profile.MaxLinVel);
+            Assert.AreEqual(0.4f, profile.MaxAngVel);
+            Assert.AreEqual(0.05f, profile.MaxLatVel);
         }
 
         [Test]
@@ -108,6 +120,39 @@ namespace OmniBot.VR.Tests
         {
             // Should not throw
             Assert.DoesNotThrow(() => CalibrationManager.ApplyTo(null, new RobotCalibration()));
+        }
+
+        [Test]
+        public void ApplyTo_JointZeroOffsets_AddsWhenLengthMatches()
+        {
+            var profile = new RobotProfile
+            {
+                Joints = new[]
+                {
+                    new JointSpec("j", "J", -1f, 1f, 0f),
+                    new JointSpec("g", "G", -0.1f, 0.8f, 0f),
+                }
+            };
+            CalibrationManager.ApplyTo(profile, new RobotCalibration
+            {
+                jointZeroOffsetsRad = new[] { 0.1f, -0.05f }
+            });
+            Assert.AreEqual(0.1f, profile.Joints[0].Home, 1e-4f);
+            Assert.AreEqual(-0.05f, profile.Joints[1].Home, 1e-4f);
+        }
+
+        [Test]
+        public void ApplyTo_JointZeroOffsets_IgnoresLengthMismatch()
+        {
+            var profile = new RobotProfile
+            {
+                Joints = new[] { new JointSpec("j", "J", -1f, 1f, 0.2f) }
+            };
+            CalibrationManager.ApplyTo(profile, new RobotCalibration
+            {
+                jointZeroOffsetsRad = new[] { 1f, 2f }
+            });
+            Assert.AreEqual(0.2f, profile.Joints[0].Home, 1e-4f);
         }
 
         [Test]

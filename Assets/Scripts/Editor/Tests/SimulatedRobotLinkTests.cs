@@ -143,7 +143,7 @@ namespace OmniBot.VR.Tests
         {
             int cmdCount = 0;
             double lastX = double.NaN;
-            _link.Subscribe(RobotConfig.TOPIC_CMD_VEL, "geometry_msgs/Twist", json =>
+            _link.Subscribe("/cmd_vel/teleop", "geometry_msgs/Twist", json =>
             {
                 cmdCount++;
                 lastX = JObject.Parse(json)["linear"]["x"].Value<double>();
@@ -179,7 +179,7 @@ namespace OmniBot.VR.Tests
             _link.Tick(SimulatedVectors.TickSeconds);
             double x = _link.Pose.X;
 
-            _link.Publish(RobotConfig.TOPIC_EMERGENCY_STOP, new BoolMsg(true));
+            _link.Publish("/emergency_stop", new BoolMsg(true));
             Assert.IsTrue(_link.EstopLatched);
             AssertVelocity(SimVelocity.Zero, _link.Applied);
 
@@ -188,7 +188,7 @@ namespace OmniBot.VR.Tests
             _link.Tick(1);
             Assert.AreEqual(x, _link.Pose.X, 1e-12);
 
-            _link.Publish(RobotConfig.TOPIC_EMERGENCY_STOP, new BoolMsg(false));
+            _link.Publish("/emergency_stop", new BoolMsg(false));
             Assert.IsFalse(_link.EstopLatched);
             _link.Tick(1);
             Assert.AreEqual(x, _link.Pose.X, 1e-12);
@@ -205,7 +205,7 @@ namespace OmniBot.VR.Tests
             Assert.AreEqual(5, unclamped.LinearX, 0);
 
             _link.SetDeadman(true);
-            _link.Publish(RobotConfig.TOPIC_CMD_VEL, new TwistMsg(
+            _link.Publish("/cmd_vel/teleop", new TwistMsg(
                 new Vector3Msg(5f, -4f, 0f),
                 new Vector3Msg(0f, 0f, 3f)));
             Assert.AreEqual((double)RobotConfig.MAX_LINEAR_VEL, _link.Applied.LinearX, 1e-6);
@@ -252,7 +252,7 @@ namespace OmniBot.VR.Tests
         [Test]
         public void Link_ArmSlewRespectsRateAndLimits()
         {
-            _link.Publish(RobotConfig.TOPIC_ARM_COMMANDS, new JointStateMsg(
+            _link.Publish("/arm/joint_commands", new JointStateMsg(
                 RobotConfig.ARM_JOINT_NAMES,
                 new[] { 1f, 0f, 0f, 0f, 0f, -5f }));
 
@@ -275,7 +275,7 @@ namespace OmniBot.VR.Tests
         public void Link_EstopFreezesArmUntilANewCommand()
         {
             _link.CommandJoints(new[] { "arm_shoulder_pan" }, new[] { 1.0 });
-            _link.Publish(RobotConfig.TOPIC_EMERGENCY_STOP, new BoolMsg(true));
+            _link.Publish("/emergency_stop", new BoolMsg(true));
             _link.Tick(1);
             Assert.AreEqual(0, _link.GetJointPosition(0), 1e-12);
 
@@ -301,17 +301,17 @@ namespace OmniBot.VR.Tests
             string telemetryJson = null;
             int odomAfterUnsub = 0;
 
-            _link.Subscribe(RobotConfig.TOPIC_ODOM, "nav_msgs/Odometry", json => odomJson = json);
-            _link.Subscribe(RobotConfig.TOPIC_ARM_STATES, "sensor_msgs/JointState", json => jointJson = json);
-            _link.Subscribe(RobotConfig.TOPIC_IMU, "sensor_msgs/Imu", json => imuJson = json);
+            _link.Subscribe("/odom", "nav_msgs/Odometry", json => odomJson = json);
+            _link.Subscribe("/arm/joint_states", "sensor_msgs/JointState", json => jointJson = json);
+            _link.Subscribe("/imu/data", "sensor_msgs/Imu", json => imuJson = json);
             _link.Subscribe(SimulatedRobotLink.TelemetryTopic, "ohho/SimTelemetry", json => telemetryJson = json);
-            _link.Advertise(RobotConfig.TOPIC_CMD_VEL, "geometry_msgs/Twist");
+            _link.Advertise("/cmd_vel/teleop", "geometry_msgs/Twist");
 
             _link.SetDeadman(true);
             _link.CommandVelocity(0.2, 0, 0);
             _link.Tick(SimulatedVectors.TickSeconds);
 
-            Assert.IsTrue(_link.IsAdvertised(RobotConfig.TOPIC_CMD_VEL));
+            Assert.IsTrue(_link.IsAdvertised("/cmd_vel/teleop"));
             Assert.IsNotNull(odomJson);
             var odom = JObject.Parse(odomJson);
             Assert.AreEqual(SimulatedRobotLink.Kind, (string)odom["kind"]);
@@ -337,14 +337,14 @@ namespace OmniBot.VR.Tests
             Assert.AreEqual(0.02, telemetry["x"].Value<double>(), 1e-9);
 
             string active = null;
-            _link.Subscribe(RobotConfig.TOPIC_CONTROL_MODE_ACTIVE, "std_msgs/String", json => active = json);
-            _link.Publish(RobotConfig.TOPIC_CONTROL_MODE, new StringMsg("teleop"));
+            _link.Subscribe("/control_mode/active", "std_msgs/String", json => active = json);
+            _link.Publish("/control_mode", new StringMsg("teleop"));
             Assert.AreEqual("sim", (string)JObject.Parse(active)["kind"]);
             Assert.AreEqual("teleop", (string)JObject.Parse(active)["data"]);
 
-            _link.Unsubscribe(RobotConfig.TOPIC_ODOM);
-            _link.Subscribe(RobotConfig.TOPIC_ODOM, "nav_msgs/Odometry", _ => odomAfterUnsub++);
-            _link.Unsubscribe(RobotConfig.TOPIC_ODOM);
+            _link.Unsubscribe("/odom");
+            _link.Subscribe("/odom", "nav_msgs/Odometry", _ => odomAfterUnsub++);
+            _link.Unsubscribe("/odom");
             _link.Tick(SimulatedVectors.TickSeconds);
             Assert.AreEqual(0, odomAfterUnsub);
         }
