@@ -83,11 +83,11 @@ CI job `build-android` in `.github/workflows/unity-tests.yml` runs that same met
 
 ## 4. Edit-mode tests
 
-The NUnit fixtures are in `Assets/Scripts/Editor/Tests/` (namespace `OmniBot.VR.Tests`). Of the earlier fixtures, 39 are 13 drive-spec, 11 control-scheme factory, 9 calibration, and 6 Fabrik IK. This branch adds the operator-rules acknowledgement fixtures in that same folder. Main adds the session-picker fixtures. Feature fixtures under `Assets/Scripts/Detection/Editor/` and `Assets/Scripts/AR/Editor/` use that same namespace and the same `OmniBot.VR.Tests` filter. CI skips the Unity steps until the Unity licence secrets are set. Run them locally in batch mode.
+The NUnit fixtures are in `Assets/Scripts/Editor/Tests/` (namespace `OmniBot.VR.Tests`). Of the earlier fixtures, 39 are 13 drive-spec, 11 control-scheme factory, 9 calibration, and 6 Fabrik IK. This branch adds the latency-budget fixtures, which also run without Unity. Main adds the operator-rules acknowledgement fixtures and the session-picker fixtures. Feature fixtures under `Assets/Scripts/Detection/Editor/` and `Assets/Scripts/AR/Editor/` use that same namespace and the same `OmniBot.VR.Tests` filter. CI skips the Unity steps until the Unity licence secrets are set. Run the Unity suite locally in batch mode.
 
 CI runs these edit-mode tests with GameCI (`.github/workflows/unity-tests.yml`) once three repository secrets are set at Settings → Secrets and variables → Actions (https://github.com/ohho-robotics/OhhO-VR/settings/secrets/actions): `UNITY_LICENSE` (the full contents of a Unity personal licence `.ulf` file, e.g. `C:\ProgramData\Unity\Unity_lic.ulf` on Windows), `UNITY_EMAIL` and `UNITY_PASSWORD` (the Unity ID account that owns that licence). Until they are set the workflow skips the Unity steps and passes. When the secrets are set, `scripts/check-editmode-results.py` reads `test-results/editmode-results.xml` (artifact name `editmode-test-results`) and fails the job if that file is missing or reports zero executed tests (passed + failed + inconclusive = 0). The counts are written to the job summary.
 
-Confirmed from the latest green run before this gate, [Unity tests run 38548684961](https://github.com/ohho-robotics/OhhO-VR/actions/runs/38548684961) (pull request 6, commit `458d2a8`, 14 Oct 2026): GameCI's Test Results check parsed `editmode-results.xml` as **53 passed / 53 total** in 0.211s. That checkout added teleop fixtures on top of the 39 tests above. The artifact zip itself is not anonymously downloadable; the check is produced from that XML. A green run of the fixtures in this checkout must show an executed count greater than zero. `OmniBot.VR.Tests` in this checkout includes the 39 drive, scheme, calibration, and IK fixtures, the operator-rules acknowledgement fixtures, the session-picker fixtures, and the Detection, AR, AprilTag, telemetry, SLAM, signaling, sim-link, and twin fixtures when the runner discovers them (273 `[Test]` or `[UnityTest]` methods outside `Assets/Tests/PlayMode`, plus 2 play-mode methods).
+Confirmed from the latest green run before this gate, [Unity tests run 38548684961](https://github.com/ohho-robotics/OhhO-VR/actions/runs/38548684961) (pull request 6, commit `458d2a8`, 14 Oct 2026): GameCI's Test Results check parsed `editmode-results.xml` as **53 passed / 53 total** in 0.211s. That checkout added teleop fixtures on top of the 39 tests above. The artifact zip itself is not anonymously downloadable; the check is produced from that XML. A green run of the fixtures in this checkout must show an executed count greater than zero. `OmniBot.VR.Tests` in this checkout includes the 39 drive, scheme, calibration, and IK fixtures, the latency-budget fixtures, the operator-rules acknowledgement fixtures, the session-picker fixtures, and the Detection, AR, AprilTag, telemetry, SLAM, signaling, sim-link, and twin fixtures when the runner discovers them (273 `[Test]` or `[UnityTest]` methods outside `Assets/Tests/PlayMode` on main before these latency-budget fixtures, plus 2 play-mode methods).
 
 Windows:
 
@@ -99,6 +99,13 @@ Linux:
 
 ```
 unity -batchmode -nographics -projectPath <clone> -runTests -testPlatform editmode -testFilter OmniBot.VR.Tests -testResults <xml> -logFile <log>
+```
+
+Latency budgets and the empty results template are in `docs/LATENCY_BUDGETS.md`. The fake-link fixtures do not need a Quest or a robot:
+
+```
+dotnet test tests/LatencyHarness.Tests/LatencyHarness.Tests.csproj
+python -m unittest discover -s scripts -p "test_*.py"
 ```
 
 ---
@@ -298,7 +305,8 @@ Cloud sim ([OHH-216](https://linear.app/ohho-robotics/issue/OHH-216)), AprilTag 
 │   │   │   ├── VRGraphicsBoost.cs   # 1.5× resolution + MSAA + FFR + 90 Hz
 │   │   │   └── RobotConfig.cs      # All constants
 │   │   ├── AR/                 # 1:1 twin overlay, robot-anchored HUD, manual placement
-│   │   ├── Control/            # RobotProfile, TeleopController, drive/manip, session targets
+│   │   ├── Control/            # RobotProfile, TeleopController, drive/manip schemes, session targets
+│   │   ├── Latency/            # latency budgets and the measurement log
 │   │   ├── Detection/          # AprilTag robot pose (see Assets/Scripts/AR/HOOKUP.md)
 │   │   ├── Input/
 │   │   │   ├── ArmIKSolver.cs      # CCD IK solver (pure C#)

@@ -8,6 +8,7 @@ using OmniBot.VR.Video;
 using OmniBot.VR.Recording;
 using OmniBot.VR.Control.Drive;
 using OmniBot.VR.Control.Manip;
+using OmniBot.VR.Latency;
 
 namespace OmniBot.VR.Control
 {
@@ -84,6 +85,7 @@ namespace OmniBot.VR.Control
 
         // ── Previous both-grips state for edge detection ─────────────────────────
         private bool _prevBothGrips;
+        private bool _ownsLatencyCapture;
 
         // ── Unity lifecycle ──────────────────────────────────────────────────────
         private void OnEnable()
@@ -102,6 +104,15 @@ namespace OmniBot.VR.Control
         {
             if (gestureDetector == null)
                 gestureDetector = FindObjectOfType<GestureDetector>();
+            _ownsLatencyCapture = LatencyCapture.TryStartFromEnvironment();
+            if (_ownsLatencyCapture)
+                LatencyCaptureHooks.EnsureCommandAckSubscription();
+        }
+
+        private void OnDestroy()
+        {
+            if (_ownsLatencyCapture)
+                LatencyCapture.StopAndWrite();
         }
 
         private void OnConnectionChanged(bool connected)
@@ -115,6 +126,8 @@ namespace OmniBot.VR.Control
         private void Update()
         {
             if (!_teleopActive || !Link.IsConnected) return;
+            if (LatencyCapture.IsEnabled)
+                LatencyCapture.MarkInputSample();
 
             // ── Build the controller input snapshot ──────────────────────────────
             Vector2 leftStick = OVRInput.Get(OVRInput.Axis2D.PrimaryThumbstick, OVRInput.Controller.LTouch);
@@ -256,6 +269,8 @@ namespace OmniBot.VR.Control
             _teleopActive = false;
             _wasThumbsUp = false;
             _thumbsUpHoldTimer = 0f;
+            if (LatencyCapture.IsEnabled)
+                LatencyCapture.ClearInputSample();
             _thumbsUpPulse = false;
             if (_workspaceVisual != null)
             {
