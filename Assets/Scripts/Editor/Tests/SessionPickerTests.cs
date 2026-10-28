@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using NUnit.Framework;
 using UnityEngine;
 using OmniBot.VR.Control;
+using OmniBot.VR.Control.Safety;
 using OmniBot.VR.Control.Session;
 using OmniBot.VR.Core;
 
@@ -165,6 +166,19 @@ namespace OmniBot.VR.Tests
             Assert.IsTrue(link.IsConnected);
             link.Publish("/cmd_vel/teleop", new TwistMsg(new Vector3Msg(0.1f, 0f, 0f), new Vector3Msg(0f, 0f, 0f)));
             Assert.AreEqual(0.1f, link.LastTwist.linear.x, 0.0001f);
+
+            bool called = false;
+            bool ok = true;
+            string values = "unset";
+            link.CallService(OhhoSafetyContract.EstopResetService, OhhoSafetyContract.EstopResetType, (success, payload) =>
+            {
+                called = true;
+                ok = success;
+                values = payload;
+            });
+            Assert.IsTrue(called);
+            Assert.IsFalse(ok);
+            Assert.AreEqual("", values);
         }
 
         [Test]
