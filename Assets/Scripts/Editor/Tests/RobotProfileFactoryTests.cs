@@ -1,6 +1,5 @@
 using NUnit.Framework;
 using OmniBot.VR.Control;
-using OmniBot.VR.Core;
 using OmniBot.VR.Core.Platform;
 
 namespace OmniBot.VR.Tests
@@ -40,7 +39,6 @@ namespace OmniBot.VR.Tests
 
             Assert.IsNotNull(profile);
             Assert.AreEqual("/arm/joint_commands/teleop", profile.Topics.ArmCommands);
-            Assert.AreEqual(RobotConfig.TOPIC_ARM_COMMANDS, profile.Topics.ArmCommands);
         }
 
         [Test]

@@ -16,6 +16,28 @@ namespace OmniBot.VR.Control
     }
 
     /// <summary>
+    /// Where the arm commands are going. <see cref="Real"/> is the default so a
+    /// profile that forgot to set this still requires the second confirm.
+    /// Only an explicit simulated garage status selects <see cref="Sim"/>.
+    /// </summary>
+    public enum ArmDeployment
+    {
+        Real = 0,
+        Sim = 1,
+    }
+
+    public static class ArmDeploymentRules
+    {
+        public static ArmDeployment FromGarageStatus(string status)
+        {
+            if (!string.IsNullOrEmpty(status) &&
+                status.Trim().Equals("simulated", System.StringComparison.OrdinalIgnoreCase))
+                return ArmDeployment.Sim;
+            return ArmDeployment.Real;
+        }
+    }
+
+    /// <summary>
     /// Runtime capability profile for the robot the user picked in their garage —
     /// a C# mirror of <c>website/lib/garage/robot-config.ts</c>
     /// <c>RobotConfig</c>. Replaces the hardcoded <c>Core/RobotConfig.cs</c>
@@ -41,7 +63,8 @@ namespace OmniBot.VR.Control
         public bool Holonomic;
         public int BaseDof;
         public string[] BaseActionLabels;
-        public float MaxLinVel;         // m/s
+        public float MaxLinVel;         // m/s, forward / vertical
+        public float MaxLatVel;         // m/s, lateral. 0 when the base cannot strafe
         public float MaxAngVel;         // rad/s
 
         /// <summary>
@@ -92,6 +115,17 @@ namespace OmniBot.VR.Control
             RequireDeadman = false;
         }
 
+        /// <summary>Caps copied from the descriptor or the catalog before calibration. Calibration cannot exceed these.</summary>
+        public float HardMaxLinVel;
+        public float HardMaxLatVel;
+        public float HardMaxAngVel;
+        public float HardMaxAccelLin;   // m/s^2. 0 = no slew limit (catalog path)
+        public float HardMaxAccelYaw;   // rad/s^2. 0 = no slew limit
+        public float HardMaxJointStep;  // rad per command. 0 = use the 0.15 ceiling
+        public JointSpec[] HardJoints;
+        /// <summary>True when speed and topics came from a RobotDescriptor. Those speeds stay inside the OmniBot ceilings.</summary>
+        public bool CapsFromDescriptor;
+
         // ── Manipulator ───────────────────────────────────────────────────────
         public bool HasArm;
         public int ArmDof;
@@ -123,6 +157,25 @@ namespace OmniBot.VR.Control
         /// </summary>
         public float[] ArmLinkLengths;
 
+        /// <summary>
+        /// Sim skips the second confirm. Anything that is not explicitly
+        /// simulated — including a missing garage status — is <see cref="ArmDeployment.Real"/>.
+        /// </summary>
+        public ArmDeployment Deployment = ArmDeployment.Real;
+
+        /// <summary>
+        /// Per-command joint step cap. <see cref="RobotProfileFactory"/> sets
+        /// this from <see cref="Core.RobotDescriptor.MaxJointDeltaRad"/>. The
+        /// manipulation schemes clamp anything larger back down.
+        /// </summary>
+        public float MaxJointDeltaRad = Core.RobotDescriptor.MaxJointDeltaRad;
+
+        /// <summary>
+        /// True only when <c>so101_joint_zeros.json</c> says the SO-101 offsets
+        /// were measured (OHH-94). Stays false while homes are the URDF zero.
+        /// </summary>
+        public bool JointZerosCalibrated;
+
         /// <summary>True if this is a dual-arm humanoid (two arms driven by two hands).</summary>
         public bool IsDualArm;
 
@@ -135,6 +188,9 @@ namespace OmniBot.VR.Control
         /// </summary>
         public IkLocation IkLocation;
 
+        /// <summary>package:// or http URL from the descriptor. Empty on the catalog path.</summary>
+        public string UrdfUrl;
+
         public int TotalDof => ArmDof + BaseDof;
     }
 
@@ -146,18 +202,24 @@ namespace OmniBot.VR.Control
     /// </summary>
     public class RobotTopics
     {
-        // Publish (teleop → robot)
-        public string CmdVel;           // base velocity (Twist)
-        public string ControlMode;      // cmd_vel_mux mode string
+        // Publish (teleop → robot). Command topics come from the descriptor when connected.
+        public string CmdVel;           // base velocity (Twist) — descriptor topics.cmd
+        public string ControlMode;      // cmd_vel_mux mode string (not in the descriptor; catalog only)
         public string ArmCommands;      // arm joint positions (JointState) — headset IK
         public string ArmEnable;        // arm enable bool
-        public string EmergencyStop;    // e-stop bool
+        public string EmergencyStop;    // e-stop bool — descriptor topics.estop
         public string IkTargetPose;     // Cartesian EE target (PoseStamped) — robot IK (MoveIt Servo)
+        public string RecordStart;      // dataset episode start (catalog; the descriptor does not name it)
+        public string RecordStop;
 
         // Subscribe (robot → teleop)
-        public string Odom;
+        public string Odom;             // descriptor topics.state
         public string Imu;
         public string JointStates;
+        public string ControlModeActive;
+        public string ArmModeActive;    // catalog only; the descriptor does not name it
+        public string Heartbeat;        // descriptor topics.heartbeat
+        public string Telemetry;        // descriptor topics.telemetry
         public List<string> Images = new List<string>();
 
         // Optional perception topics for the SLAM map panel. Blank fields fall

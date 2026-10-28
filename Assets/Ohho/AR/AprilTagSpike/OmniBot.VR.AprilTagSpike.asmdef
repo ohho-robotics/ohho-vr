@@ -1,0 +1,14 @@
+{
+    "name": "OmniBot.VR.AprilTagSpike",
+    "rootNamespace": "OmniBot.VR.AprilTagSpike",
+    "references": [],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

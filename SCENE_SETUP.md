@@ -129,8 +129,12 @@ One persistent GameObject holding the platform services (each is a singleton):
    `TeleopController`. The teleop page opens with a blue **SIM** or orange **REAL** banner.
    - **Base:** left stick strafe (vx/vy), right stick X yaw, right grip turbo,
      both grips e-stop.
-   - **Arm:** right-hand pose → IK → `/arm/joint_commands/teleop` @ 20 Hz; pinch →
-     gripper; left-hand thumbs-up (hold 0.5 s) toggles arm enable.
+   - **Arm:** Left X requests enable (a real robot needs a second Left X
+     before `/arm/enable`). A left-hand thumbs-up (hold 0.5 s) requests enable
+     or turns the arm off and never confirms a real robot. Hold the right index
+     trigger to move — the first command is the pose already held, then the
+     right-hand pose drives IK to `/arm/joint_commands/teleop` @ 20 Hz. Pinch
+     closes the gripper. Poor hand tracking jogs one joint with right stick Y.
    - All topics, joint names and limits come from the profile (OmniBot = SO-101
      6-DOF + mecanum, identical to the old hardcoded constants).
 
