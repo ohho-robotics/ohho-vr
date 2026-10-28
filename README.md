@@ -11,13 +11,10 @@ in front of you in passthrough and always faces you. It is the headset-native
 front end of **ohho-robotics.com**: the same Supabase account, the same garage
 of robots, the same branding — sign in once and everything is already there.
 
-Flow on this commit: **Login → Console (VR products) → Garage (your robots) → Teleop** —
+Flow: **Login → Console (VR products) → Garage (your robots) → Simulate or Drive real → Teleop** —
 all inside the one screen. `WorldSpaceUiPlacer` defaults to 1.2 m ahead
 (`distance`) and billboards toward you; a scene value can override that.
 Press **left-controller B** to hide/show it.
-Simulate vs Drive real is not in this commit. It is
-[OHH-212](https://linear.app/ohho-robotics/issue/OHH-212/ohho-vr-robot-card-simulate-drive-real-target-picker-local-desktop)
-on `ohh-212-session-picker` ([PR #9](https://github.com/ohho-robotics/OhhO-VR/pull/9)).
 
 Guides: [user guide](docs/user-guide.md), [local sim](docs/setup-local-sim.md),
 [cloud sim](docs/setup-cloud.md) (not ready), [real OmniBot](docs/setup-real-omnibot.md),
@@ -86,11 +83,11 @@ CI job `build-android` in `.github/workflows/unity-tests.yml` runs that same met
 
 ## 4. Edit-mode tests
 
-The NUnit fixtures are in `Assets/Scripts/Editor/Tests/` (59 tests in namespace `OmniBot.VR.Tests`). Of those, 39 are the earlier fixtures: 13 drive-spec, 11 control-scheme factory, 9 calibration, 6 Fabrik IK. Feature fixtures under `Assets/Scripts/Detection/Editor/` and `Assets/Scripts/AR/Editor/` use that same namespace and the same `OmniBot.VR.Tests` filter. CI skips the Unity steps until the Unity licence secrets are set. Run them locally in batch mode.
+The NUnit fixtures are in `Assets/Scripts/Editor/Tests/` (namespace `OmniBot.VR.Tests`), including this branch's session-picker fixtures and the earlier 39: 13 drive-spec, 11 control-scheme factory, 9 calibration, 6 Fabrik IK. Feature fixtures under `Assets/Scripts/Detection/Editor/` and `Assets/Scripts/AR/Editor/` use that same namespace and the same `OmniBot.VR.Tests` filter. CI skips the Unity steps until the Unity licence secrets are set. Run them locally in batch mode.
 
 CI runs these edit-mode tests with GameCI (`.github/workflows/unity-tests.yml`) once three repository secrets are set at Settings → Secrets and variables → Actions (https://github.com/ohho-robotics/OhhO-VR/settings/secrets/actions): `UNITY_LICENSE` (the full contents of a Unity personal licence `.ulf` file, e.g. `C:\ProgramData\Unity\Unity_lic.ulf` on Windows), `UNITY_EMAIL` and `UNITY_PASSWORD` (the Unity ID account that owns that licence). Until they are set the workflow skips the Unity steps and passes. When the secrets are set, `scripts/check-editmode-results.py` reads `test-results/editmode-results.xml` (artifact name `editmode-test-results`) and fails the job if that file is missing or reports zero executed tests (passed + failed + inconclusive = 0). The counts are written to the job summary.
 
-Confirmed from the latest green run before this gate, [Unity tests run 38548684961](https://github.com/ohho-robotics/OhhO-VR/actions/runs/38548684961) (pull request 6, commit `458d2a8`, 14 Oct 2026): GameCI's Test Results check parsed `editmode-results.xml` as **53 passed / 53 total** in 0.211s. That checkout added teleop fixtures on top of the 39 tests above. The artifact zip itself is not anonymously downloadable; the check is produced from that XML. A green run of the fixtures in this checkout must show an executed count greater than zero (expected 59 in `OmniBot.VR.Tests`, including the 39 drive, scheme, calibration, and IK fixtures above, plus the Detection and AR feature fixtures when the runner discovers them).
+Confirmed from the latest green run before this gate, [Unity tests run 38548684961](https://github.com/ohho-robotics/OhhO-VR/actions/runs/38548684961) (pull request 6, commit `458d2a8`, 14 Oct 2026): GameCI's Test Results check parsed `editmode-results.xml` as **53 passed / 53 total** in 0.211s. That checkout added teleop fixtures on top of the 39 tests above. The artifact zip itself is not anonymously downloadable; the check is produced from that XML. A green run of the fixtures in this checkout must show an executed count greater than zero. `OmniBot.VR.Tests` includes the 39 drive, scheme, calibration, and IK fixtures, the session-picker fixtures, and the Detection and AR feature fixtures when the runner discovers them.
 
 Windows:
 
@@ -120,12 +117,19 @@ unity -batchmode -nographics -projectPath <clone> -runTests -testPlatform editmo
    (`GarageClient`). Empty means the account has no rows or the read failed.
    Add a robot on ohho-robotics.com and open the garage again. **Open Website**
    launches the site in the Quest browser.
-6. **Pick a robot** → the **Teleop** page opens. Enter the IP
-   (default `192.168.1.101`) and port (default `9090`) → **Connect**.
-   The status dot turns green when the WebSocket connects. That is not a
-   video check and not a stop check. A Simulate / Drive real page exists only
-   on [PR #9](https://github.com/ohho-robotics/OhhO-VR/pull/9). See
-   [docs/user-guide.md](docs/user-guide.md).
+6. **Pick a robot** → choose **Simulate** or **Drive real**.
+   - **Simulate → Local desktop** uses the IP and port already filled in
+     (default `192.168.1.101`, port `9090`) and opens Teleop. Registry sessions
+     appear as extra buttons below it. From the garage that is three clicks:
+     the robot, Simulate, Local desktop.
+   - **Cloud** starts a session when an orchestrator is configured, or attaches to
+     a `wss://` rosbridge URL.
+   - **In-headset** is an offline demo. It does not open a socket.
+   - **Drive real** shows a safety notice, and a deadman tutorial the first time,
+     before an announced robot or a manual IP. The deadman stays on for a real robot.
+   The Teleop status dot turns green when a network session connects. A blue **SIM**
+   or orange **REAL** banner stays on the teleop, camera, and controls pages.
+   See [docs/user-guide.md](docs/user-guide.md).
 
 Connect expects a robot that is **not in this repository**. The headset opens a ROSBridge WebSocket (default port `9090`). Recording export expects an HTTP bridge on port `8765`. The camera view tries WebRTC first: with PlayerPrefs `ohho.webrtc.token` it opens `wss://<robot>:8443/webrtc/signaling`, and without a token it opens `ws://<robot>:8766/signaling`. MJPEG from `web_video_server` on port `8080` is the fallback. An explicit socket can be set in `ohho.webrtc.url`. Those processes live on the robot PC. This repo does not ship them.
 
@@ -245,7 +249,7 @@ Tweak the values in the inspector on `[OhhO VR App] → VRGraphicsBoost`.
 
 ## 9. Dataset Recording Workflow
 
-1. Open the **Teleop** page (pick a robot in the garage).
+1. Open the **Teleop** page (pick a robot, then Simulate or Drive real).
 2. Press **Start Recording**. The status shows the episode name + live timer.
 3. Perform the demonstration — all arm states, odometry, and commands are
    captured at 30 Hz locally on the headset.
@@ -285,7 +289,7 @@ Cloud sim ([OHH-216](https://linear.app/ohho-robotics/issue/OHH-216)), AprilTag 
 ├── Assets/
 │   ├── scene1.unity            # the only enabled build scene
 │   ├── Scripts/
-│   │   ├── App/OhhoVrApp.cs    # login→console→garage→teleop routing (singleton)
+│   │   ├── App/OhhoVrApp.cs    # login→console→garage→session→teleop routing
 │   │   ├── Core/
 │   │   │   ├── Messages/       # ROSBridge JSON message types
 │   │   │   ├── Platform/       # manifest/catalog/Supabase/garage clients
@@ -294,7 +298,7 @@ Cloud sim ([OHH-216](https://linear.app/ohho-robotics/issue/OHH-216)), AprilTag 
 │   │   │   ├── VRGraphicsBoost.cs   # 1.5× resolution + MSAA + FFR + 90 Hz
 │   │   │   └── RobotConfig.cs      # All constants
 │   │   ├── AR/                 # 1:1 twin overlay, robot-anchored HUD, manual placement
-│   │   ├── Control/            # RobotProfile, TeleopController, drive/manip schemes
+│   │   ├── Control/            # RobotProfile, TeleopController, drive/manip, session targets
 │   │   ├── Detection/          # AprilTag robot pose (see Assets/Scripts/AR/HOOKUP.md)
 │   │   ├── Input/
 │   │   │   ├── ArmIKSolver.cs      # CCD IK solver (pure C#)
@@ -308,6 +312,7 @@ Cloud sim ([OHH-216](https://linear.app/ohho-robotics/issue/OHH-216)), AprilTag 
 │   │   │   ├── Auth/LoginPanelController.cs
 │   │   │   ├── Console/ConsolePanelController.cs
 │   │   │   ├── Garage/GaragePanelController.cs
+│   │   │   ├── Session/SessionPickerPanel.cs # Simulate / Drive real, then a target
 │   │   │   ├── TeleopHudController.cs # connection+telemetry+camera+recording+export
 │   │   │   └── ...
 │   │   ├── Video/              # WebRTC receive (ohho_webrtc) with MJPEG fallback
