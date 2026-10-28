@@ -83,11 +83,11 @@ CI job `build-android` in `.github/workflows/unity-tests.yml` runs that same met
 
 ## 4. Edit-mode tests
 
-The NUnit fixtures are in `Assets/Scripts/Editor/Tests/` (namespace `OmniBot.VR.Tests`). Of the earlier fixtures, 39 are 13 drive-spec, 11 control-scheme factory, 9 calibration, and 6 Fabrik IK. Feature fixtures under `Assets/Scripts/Detection/Editor/` and `Assets/Scripts/AR/Editor/` use that same namespace and the same `OmniBot.VR.Tests` filter. The latency-budget fixtures in that namespace also run without Unity. The session-picker fixtures are in the same namespace. CI skips the Unity steps until the Unity licence secrets are set. Run the Unity suite locally in batch mode.
+The NUnit fixtures are in `Assets/Scripts/Editor/Tests/` (namespace `OmniBot.VR.Tests`). Of the earlier fixtures, 39 are 13 drive-spec, 11 control-scheme factory, 9 calibration, and 6 Fabrik IK. This branch adds the latency-budget fixtures, which also run without Unity. Main adds the operator-rules acknowledgement fixtures and the session-picker fixtures. Feature fixtures under `Assets/Scripts/Detection/Editor/` and `Assets/Scripts/AR/Editor/` use that same namespace and the same `OmniBot.VR.Tests` filter. CI skips the Unity steps until the Unity licence secrets are set. Run the Unity suite locally in batch mode.
 
 CI runs these edit-mode tests with GameCI (`.github/workflows/unity-tests.yml`) once three repository secrets are set at Settings → Secrets and variables → Actions (https://github.com/ohho-robotics/OhhO-VR/settings/secrets/actions): `UNITY_LICENSE` (the full contents of a Unity personal licence `.ulf` file, e.g. `C:\ProgramData\Unity\Unity_lic.ulf` on Windows), `UNITY_EMAIL` and `UNITY_PASSWORD` (the Unity ID account that owns that licence). Until they are set the workflow skips the Unity steps and passes. When the secrets are set, `scripts/check-editmode-results.py` reads `test-results/editmode-results.xml` (artifact name `editmode-test-results`) and fails the job if that file is missing or reports zero executed tests (passed + failed + inconclusive = 0). The counts are written to the job summary.
 
-Confirmed from the latest green run before this gate, [Unity tests run 38548684961](https://github.com/ohho-robotics/OhhO-VR/actions/runs/38548684961) (pull request 6, commit `458d2a8`, 14 Oct 2026): GameCI's Test Results check parsed `editmode-results.xml` as **53 passed / 53 total** in 0.211s. That checkout added teleop fixtures on top of the 39 tests above. The artifact zip itself is not anonymously downloadable; the check is produced from that XML. A green run of the fixtures in this checkout must show an executed count greater than zero. `OmniBot.VR.Tests` includes the 39 drive, scheme, calibration, and IK fixtures, the latency-budget fixtures, the session-picker fixtures, and the Detection and AR feature fixtures when the runner discovers them.
+Confirmed from the latest green run before this gate, [Unity tests run 38548684961](https://github.com/ohho-robotics/OhhO-VR/actions/runs/38548684961) (pull request 6, commit `458d2a8`, 14 Oct 2026): GameCI's Test Results check parsed `editmode-results.xml` as **53 passed / 53 total** in 0.211s. That checkout added teleop fixtures on top of the 39 tests above. The artifact zip itself is not anonymously downloadable; the check is produced from that XML. A green run of the fixtures in this checkout must show an executed count greater than zero. `OmniBot.VR.Tests` in this checkout includes the 39 drive, scheme, calibration, and IK fixtures, the latency-budget fixtures, the operator-rules acknowledgement fixtures, the session-picker fixtures, and the Detection, AR, AprilTag, telemetry, SLAM, signaling, sim-link, and twin fixtures when the runner discovers them (273 `[Test]` or `[UnityTest]` methods outside `Assets/Tests/PlayMode` on main before these latency-budget fixtures, plus 2 play-mode methods).
 
 Windows:
 
@@ -165,8 +165,8 @@ Assigning an `InHeadsetSimHost` to `TeleopController.linkProvider` is the same c
 | Left thumbstick Y | Forward / backward (linear.x) |
 | Left thumbstick X | Strafe left / right (linear.y) |
 | Right thumbstick X | Rotate left / right (angular.z) |
-| Right grip (hold) | Scales stick deflection by 2, then clamps it to ±1 before `MaxLinVel`. Full stick is not faster. OmniBot `MaxLinVel` is 0.2 m/s |
-| **Both grips simultaneously** | Publishes `/emergency_stop` true and stops new twists. Does not publish a zero twist. Release publishes false. Not a hardware e-stop — [docs/safety.md](docs/safety.md) |
+| Right grip (hold) | Scales stick deflection by 2, then clamps it to ±1 before `MaxLinVel`. Full stick is not faster than the cap. OmniBot `MaxLinVel` is 0.2 m/s. A calibration override can raise that cap. |
+| **Both grips simultaneously** | Publishes `/emergency_stop` true and stops new twists. Does not publish a zero twist. Release publishes false. Held means stop, release means clear. Not a hardware e-stop — [docs/safety.md](docs/safety.md) |
 | Left controller B | Hide / show the OhhO Screen |
 | Right thumbstick press | Cycle camera feed |
 
@@ -346,6 +346,18 @@ Cloud sim ([OHH-216](https://linear.app/ohho-robotics/issue/OHH-216)), AprilTag 
 | Arm not moving | Request enable with Left X or a thumbs-up. On a real robot press Left X again to confirm, then hold the right index trigger. The arm will not jump to the hand on enable. Nothing is published on `/arm/enable` before that confirm |
 | UI looks low-res | `VRGraphicsBoost` sets 1.5× eye resolution at startup; check it exists on `[OhhO VR App]` |
 | Text renders magenta | The TMP font materials use `TextMeshPro/Distance Field`; if they regress, re-assign `TextMeshPro/Distance Field` to the LiberationSans SDF materials |
+
+---
+
+## 14. Safety case
+
+Driving a real robot from this client needs the written case, not only the controls table above.
+
+- [docs/safety-case.md](docs/safety-case.md) — FMEA of the headset-to-robot path, with each control tied to a file and a test, or marked pending
+- [docs/operator-rules.md](docs/operator-rules.md) — hardware e-stop, line of sight, speed cap, area clearance, Varun present (rules version 1)
+- [docs/release-signoff-checklist.md](docs/release-signoff-checklist.md) — release gate. It is unsigned.
+
+`RealSessionGate.TryBegin(SessionTarget.Real)` blocks a real session until rules version 1 is accepted. Sim sessions are not blocked. The garage pick path does not yet know which target it is starting, so the app does not call the gate. The TODO is on `RealSessionGate`.
 
 ---
 
