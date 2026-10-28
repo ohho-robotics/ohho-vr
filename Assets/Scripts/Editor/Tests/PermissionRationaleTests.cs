@@ -35,18 +35,23 @@ namespace OmniBot.VR.Tests
         [Test]
         public void AndroidStringResources_MatchTheRuntimeCopy()
         {
-            var path = Path.Combine(
-                Application.dataPath,
-                "Plugins",
-                "Android",
-                "res",
-                "values",
-                "strings.xml");
+            var plugins = Path.Combine(Application.dataPath, "Plugins", "Android");
+            // Unity 6 fails the player build when this directory exists.
+            Assert.IsFalse(Directory.Exists(Path.Combine(plugins, "res")));
+
+            var library = Path.Combine(plugins, "PermissionRationales.androidlib");
+            var path = Path.Combine(library, "res", "values", "strings.xml");
             Assert.IsTrue(File.Exists(path), path);
             var xml = File.ReadAllText(path);
             StringAssert.Contains(HeadsetCameraGate.Rationale, xml);
             StringAssert.Contains(HeadsetCameraGate.HandTrackingRationale, xml);
             StringAssert.Contains(HeadsetCameraGate.DeniedReason, xml);
+
+            var manifestPath = Path.Combine(library, "AndroidManifest.xml");
+            Assert.IsTrue(File.Exists(manifestPath), manifestPath);
+            StringAssert.Contains(
+                "package=\"com.ohhorobotics.ohhovr.permissions\"",
+                File.ReadAllText(manifestPath));
         }
     }
 }

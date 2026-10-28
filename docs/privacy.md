@@ -94,7 +94,7 @@ If camera permission is denied, `RobotDetectionService` turns detection off, dro
 
 `HeadsetCameraGate.Notices` lists the permissions this app explains:
 
-- `horizonos.permission.HEADSET_CAMERA` — requested at runtime on an Android player by `HeadsetCameraGate.RequestAccess`, only when it is not already granted. The rationale and the denial message are in `HeadsetCameraGate` and in `Assets/Plugins/Android/res/values/strings.xml`.
+- `horizonos.permission.HEADSET_CAMERA` — requested at runtime on an Android player by `HeadsetCameraGate.RequestAccess`, only when it is not already granted. The rationale and the denial message are in `HeadsetCameraGate` and in `Assets/Plugins/Android/PermissionRationales.androidlib/res/values/strings.xml`.
 - `com.oculus.permission.HAND_TRACKING` — declared in `AndroidManifest.xml`. Hand tracking support in the Oculus project config is on. App code does not call `OVRPermissionsRequester` for it. The rationale string says hand poses stay on the headset and that the base still drives from the controllers.
 
 `OVRManager` can also request body, face, eye, scene, microphone, and passthrough-camera permission on startup. Those serialized flags are not set in `Assets/scene1.unity` (the fields are absent, so they stay at the script default of false). `microphoneUsageDescription` in `ProjectSettings/ProjectSettings.asset` is empty. Insight passthrough (the see-through background, `PassthroughManager`) is not the RGB headset camera.
