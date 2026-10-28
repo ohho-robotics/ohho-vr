@@ -370,7 +370,7 @@ namespace OmniBot.VR.Tests
         [Test]
         public void Link_EstopReset_RefusesWhileAsserted_ThenClearsAnApiLatch()
         {
-            _link.Publish(RobotConfig.TOPIC_EMERGENCY_STOP, new BoolMsg(true));
+            _link.Publish("/emergency_stop", new BoolMsg(true));
             Assert.IsTrue(_link.EstopLatched);
 
             bool refused = true;
@@ -387,7 +387,7 @@ namespace OmniBot.VR.Tests
             Assert.That(refusedValues, Does.Contain("stop still asserted"));
             Assert.IsTrue(_link.EstopLatched);
 
-            _link.Publish(RobotConfig.TOPIC_EMERGENCY_STOP, new BoolMsg(false));
+            _link.Publish("/emergency_stop", new BoolMsg(false));
             Assert.IsFalse(_link.EstopLatched);
 
             _link.EmergencyStop();
@@ -429,7 +429,7 @@ namespace OmniBot.VR.Tests
             try
             {
                 var host = go.AddComponent<InHeadsetSimHost>();
-                host.Publish(RobotConfig.TOPIC_EMERGENCY_STOP, new BoolMsg(true));
+                host.Publish("/emergency_stop", new BoolMsg(true));
                 Assert.IsTrue(host.Sim.EstopLatched);
 
                 bool ok = true;
