@@ -18,6 +18,8 @@ namespace OmniBot.VR.Core
     {
         // ── Singleton ────────────────────────────────────────────────────────
         private static ROSBridgeClient _instance;
+        public static bool HasInstance => _instance != null;
+
         public static ROSBridgeClient Instance
         {
             get
@@ -119,15 +121,22 @@ namespace OmniBot.VR.Core
         }
 
         /// <summary>Cleanly disconnects from ROSBridge.</summary>
-        public async void Disconnect()
+        public void Disconnect()
+        {
+            _ = DisconnectAsync();
+        }
+
+        /// <summary>
+        /// Closes the current socket and completes when that close finishes.
+        /// <see cref="Disconnect"/> does not wait, so a session switch must await this.
+        /// </summary>
+        public System.Threading.Tasks.Task DisconnectAsync()
         {
             _intentionalDisconnect = true;
             _reconnecting = false;
-            if (_socket != null && _socket.State == WebSocketState.Open)
-            {
-                await _socket.Close();
-            }
+            var socket = _socket;
             _socket = null;
+            return CloseSocketAsync(socket);
         }
 
         /// <summary>
@@ -290,16 +299,35 @@ namespace OmniBot.VR.Core
 
         // ── Private helpers ──────────────────────────────────────────────────
 
+        private async System.Threading.Tasks.Task CloseSocketAsync(WebSocket socket)
+        {
+            if (socket == null) return;
+            socket.OnOpen -= HandleOpen;
+            socket.OnClose -= HandleClose;
+            socket.OnError -= HandleError;
+            socket.OnMessage -= HandleMessage;
+            if (socket.State != WebSocketState.Open)
+                return;
+            try
+            {
+                await socket.Close();
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[ROSBridgeClient] Socket close failed: {ex.Message}");
+            }
+        }
+
         private async System.Threading.Tasks.Task ConnectAsync(string url)
         {
-            // Clean up any existing socket
-            if (_socket != null)
-            {
-                _socket.OnOpen -= HandleOpen;
-                _socket.OnClose -= HandleClose;
-                _socket.OnError -= HandleError;
-                _socket.OnMessage -= HandleMessage;
-            }
+            // Close the previous socket before replacing it. Detaching the
+            // handlers alone leaves that connection open.
+            var previous = _socket;
+            _socket = null;
+            if (previous != null)
+                await CloseSocketAsync(previous);
+            if (_intentionalDisconnect)
+                return;
 
             _socket = new WebSocket(url);
             _socket.OnOpen += HandleOpen;

@@ -201,6 +201,10 @@ namespace OmniBot.VR.UI
 
         private void OnConnectClicked()
         {
+            // The session banner and safety gate follow ActiveSession. A manual
+            // connect must not swap the robot out from under that label.
+            if (OmniBot.VR.Control.Session.ActiveSession.Current != null) return;
+
             string ip = ipField != null ? ipField.text.Trim() : "192.168.1.101";
             int port = 9090;
             if (portField != null) int.TryParse(portField.text.Trim(), out port);
@@ -220,7 +224,10 @@ namespace OmniBot.VR.UI
             if (connectionDot != null)
                 connectionDot.color = connected ? ConnectedColor : DisconnectedColor;
             SetConnectionLabel(connected ? "Connected" : "Disconnected");
-            if (connectButton != null) connectButton.interactable = !connected;
+            bool manualConnect = OmniBot.VR.Control.Session.ActiveSession.Current == null;
+            if (ipField != null) ipField.interactable = manualConnect;
+            if (portField != null) portField.interactable = manualConnect;
+            if (connectButton != null) connectButton.interactable = manualConnect && !connected;
             if (disconnectButton != null) disconnectButton.interactable = connected;
         }
 
@@ -679,8 +686,20 @@ namespace OmniBot.VR.UI
         private void RefreshRobotLabel()
         {
             var profile = _teleop != null ? _teleop.Profile : null;
+            var session = OmniBot.VR.Control.Session.ActiveSession.Current;
             if (robotNameText != null)
-                robotNameText.text = profile != null ? profile.Name : "No robot selected";
+            {
+                if (profile != null && session != null)
+                {
+                    robotNameText.text = OmniBot.VR.Control.Session.SessionBannerStyle.LabelFor(session.Kind)
+                        + "  ·  " + profile.Name;
+                    robotNameText.color = OmniBot.VR.Control.Session.SessionBannerStyle.ColorFor(session.Kind);
+                }
+                else
+                    robotNameText.text = profile != null ? profile.Name : "No robot selected";
+            }
+            if (session != null)
+                OmniBot.VR.UI.Session.SessionModeBanner.Apply(gameObject, session.Kind);
             if (hintsText != null && _teleop != null)
                 hintsText.text = _teleop.DriveHint + "\n" + _teleop.ManipHint + "\n" + _teleop.ArmStatus;
         }
