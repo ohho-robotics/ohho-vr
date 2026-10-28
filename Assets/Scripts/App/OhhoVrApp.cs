@@ -4,6 +4,7 @@ using OmniBot.VR.Core.Platform;
 using OmniBot.VR.Control;
 using OmniBot.VR.Control.Session;
 using OmniBot.VR.UI;
+using LatchedRobotDescriptor = OmniBot.VR.Descriptor.RobotDescriptor;
 using OmniBot.VR.UI.Garage;
 using OmniBot.VR.UI.Preflight;
 using OmniBot.VR.UI.Session;
@@ -62,6 +63,8 @@ namespace OmniBot.VR.App
         private string _pendingName;
         private string _pendingUserRobotId;
         private OfflineKinematicLink _offlineLink;
+        private GarageRobot _activeRobot;
+        private LatchedRobotDescriptor _descriptor;
 
         private void Awake()
         {
@@ -80,6 +83,14 @@ namespace OmniBot.VR.App
                 fleetPanelController.RobotPicked += OnRobotPicked;
                 fleetPanelController.QuickResume += OnQuickResume;
             }
+
+            var conn = ConnectionManager.Instance;
+            if (conn != null)
+            {
+                conn.OnRobotDescriptor += OnRobotDescriptor;
+                conn.OnConnectionStateChanged += OnLinkChanged;
+                _descriptor = conn.LatestDescriptor;
+            }
         }
 
         private void OnDisable()
@@ -94,6 +105,40 @@ namespace OmniBot.VR.App
             }
             UnhookPicker();
             UnhookPreflight();
+
+            var conn = ConnectionManager.Instance;
+            if (conn != null)
+            {
+                conn.OnRobotDescriptor -= OnRobotDescriptor;
+                conn.OnConnectionStateChanged -= OnLinkChanged;
+            }
+        }
+
+        private void OnRobotDescriptor(LatchedRobotDescriptor descriptor)
+        {
+            _descriptor = descriptor;
+            if (_activeRobot == null) return;
+            if (teleopController != null && teleopController.IsTeleopActive)
+            {
+                ApplyActiveProfile(showUi: false);
+                return;
+            }
+
+            // The picker is still open. Keep the profile that will be confirmed
+            // on the descriptor so catalog speeds cannot outrank the robot.
+            if (_pendingProfile != null)
+            {
+                var refreshed = BuildActiveProfile();
+                if (refreshed != null) _pendingProfile = refreshed;
+            }
+        }
+
+        private void OnLinkChanged(bool connected)
+        {
+            // Drop the cached document so the next pick does not reuse another robot's
+            // topics. The profile already in teleop stays until a new document arrives,
+            // so a disconnect cannot swap in a higher catalog speed.
+            if (!connected) _descriptor = null;
         }
 
         private void Start()
@@ -114,10 +159,23 @@ namespace OmniBot.VR.App
                 auth.RestoreSession(restored => { if (restored) ShowConsole(); else ShowLogin(); });
         }
 
-        private void OnAuthChanged(bool signedIn)
+        private async void OnAuthChanged(bool signedIn)
         {
-            if (signedIn) ShowConsole();
-            else ShowLogin();
+            if (signedIn)
+            {
+                ShowConsole();
+                return;
+            }
+
+            // Sign-out must stop the robot that is still linked. Hiding the
+            // panels alone leaves teleop publishing.
+            if (teleopController != null) teleopController.StopTeleop();
+            if (ConnectionManager.HasInstance && ROSBridgeClient.HasInstance &&
+                ConnectionManager.Instance.IsConnected)
+                await ConnectionManager.Instance.DisconnectAsync();
+            if (this == null) return;
+            if (auth != null && auth.IsSignedIn) return;
+            ShowLogin();
         }
 
         // ── Panel routing ─────────────────────────────────────────────────────
@@ -180,6 +238,56 @@ namespace OmniBot.VR.App
         }
 
         /// <summary>
+        /// Descriptor wins while connected. The catalog profile is the offline
+        /// fallback and fills topics the descriptor does not name.
+        /// </summary>
+        private bool ApplyActiveProfile(bool showUi)
+        {
+            if (_activeRobot == null) return false;
+            if (teleopController == null)
+            {
+                Debug.LogWarning("[OhhoVrApp] TeleopController not assigned — cannot start teleop.");
+                return false;
+            }
+
+            var profile = BuildActiveProfile();
+            if (profile == null)
+            {
+                Debug.LogWarning($"[OhhoVrApp] Could not build a profile for {_activeRobot.DisplayName}.");
+                return false;
+            }
+
+            teleopController.StartTeleop(profile);
+            if (showUi) ShowTeleop();
+            return true;
+        }
+
+        /// <summary>
+        /// Descriptor wins while connected. The catalog profile is the offline
+        /// fallback and fills topics the descriptor does not name. Calibration
+        /// cannot raise the sealed caps.
+        /// </summary>
+        private RobotProfile BuildActiveProfile()
+        {
+            if (_activeRobot == null) return null;
+            var catalog = RobotProfileFactory.FromGarageRobot(_activeRobot);
+            if (catalog == null) return null;
+
+            var conn = ConnectionManager.Instance;
+            if (_descriptor == null && conn != null)
+                _descriptor = conn.LatestDescriptor;
+
+            var profile = _descriptor != null
+                ? RobotProfileFactory.FromDescriptor(_descriptor, catalog) ?? catalog
+                : catalog;
+
+            string calibrationId = string.IsNullOrEmpty(catalog.RobotId) ? profile.RobotId : catalog.RobotId;
+            var cal = CalibrationManager.Load(calibrationId);
+            CalibrationManager.ApplyTo(profile, cal);
+            return profile;
+        }
+
+        /// <summary>
         /// Quick-resume: jump straight into teleop with the last-driven robot.
         /// Resolves the saved robot id from the catalog, builds + calibrates the
         /// profile, and starts teleop. Falls back to the garage if the robot is
@@ -229,29 +337,29 @@ namespace OmniBot.VR.App
         private void BeginRobot(GarageRobot robot, bool quickResume)
         {
             if (robot == null) return;
-            var profile = RobotProfileFactory.FromGarageRobot(robot);
-            if (profile == null)
-            {
-                Debug.LogWarning($"[OhhoVrApp] Could not build a profile for {robot.DisplayName}.");
-                return;
-            }
+            _activeRobot = robot;
             if (teleopController == null)
             {
                 Debug.LogWarning("[OhhoVrApp] TeleopController not assigned — cannot start teleop.");
                 return;
             }
 
-            var cal = CalibrationManager.Load(profile.RobotId);
-            CalibrationManager.ApplyTo(profile, cal);
+            var profile = BuildActiveProfile();
+            if (profile == null)
+            {
+                Debug.LogWarning($"[OhhoVrApp] Could not build a profile for {robot.DisplayName}.");
+                return;
+            }
 
             _pendingProfile = profile;
             _pendingName = robot.DisplayName;
             _pendingUserRobotId = robot.UserRobot != null ? robot.UserRobot.Id : null;
 
             RobotEndpoint saved = null;
-            bool hasChoice = LastRobotStore.TryLoadChoice(profile.RobotId, out saved);
-            if (!hasChoice && !string.IsNullOrEmpty(_pendingUserRobotId))
-                hasChoice = LastRobotStore.TryLoadChoice(_pendingUserRobotId, out saved);
+            bool hasChoice = !string.IsNullOrEmpty(_pendingUserRobotId) &&
+                             LastRobotStore.TryLoadChoice(_pendingUserRobotId, out saved);
+            if (!hasChoice)
+                hasChoice = LastRobotStore.TryLoadChoice(profile.RobotId, out saved);
 
             // Quick-resume of a sim target skips the picker. A real robot still
             // stops on the safety notice — resume must not skip that.
@@ -261,20 +369,24 @@ namespace OmniBot.VR.App
                 return;
             }
 
-            string ip = EndpointAddresses.DefaultIp;
-            int port = EndpointAddresses.RosbridgePort;
+            // Simulate and Drive real keep separate addresses. A saved real host
+            // must not prefill Simulate, and the last socket is not a sim target.
+            string simIp = EndpointAddresses.DefaultIp;
+            int simPort = EndpointAddresses.RosbridgePort;
+            string realIp = EndpointAddresses.DefaultIp;
+            int realPort = EndpointAddresses.RosbridgePort;
             if (hasChoice && saved != null && !string.IsNullOrEmpty(saved.Host))
             {
-                ip = saved.Host;
-                if (saved.Port > 0) port = saved.Port;
-            }
-            else
-            {
-                var conn = ConnectionManager.Instance;
-                if (conn != null)
+                int savedPort = saved.Port > 0 ? saved.Port : EndpointAddresses.RosbridgePort;
+                if (saved.Kind == SessionKind.Real)
                 {
-                    ip = conn.CurrentIp;
-                    port = conn.CurrentPort;
+                    realIp = saved.Host;
+                    realPort = savedPort;
+                }
+                else
+                {
+                    simIp = saved.Host;
+                    simPort = savedPort;
                 }
             }
 
@@ -283,10 +395,11 @@ namespace OmniBot.VR.App
                 : PickerStep.Mode;
             EnsurePicker();
             ShowSessionPicker();
-            _picker.Open(profile.RobotId, _pendingUserRobotId, robot.DisplayName, ip, port, step);
+            _picker.Open(profile.RobotId, _pendingUserRobotId, robot.DisplayName,
+                simIp, simPort, realIp, realPort, step);
         }
 
-        private void OnSessionConfirmed(SessionLaunch plan)
+        private async void OnSessionConfirmed(SessionLaunch plan)
         {
             if (plan == null || !plan.ReadyToDrive || plan.Endpoint == null || _pendingProfile == null) return;
             if (teleopController == null) return;
@@ -311,6 +424,14 @@ namespace OmniBot.VR.App
                 Debug.LogWarning("[OhhoVrApp] Refusing real teleop because the deadman is off.");
                 return;
             }
+
+            // Zero the robot on the link that is still installed, then wait until
+            // that socket is closed before pointing teleop at the new target.
+            teleopController.StopTeleop();
+            if (ConnectionManager.HasInstance && ROSBridgeClient.HasInstance &&
+                ConnectionManager.Instance.IsConnected)
+                await ConnectionManager.Instance.DisconnectAsync();
+            if (this == null || teleopController == null || _pendingProfile == null) return;
 
             ActiveSession.Set(endpoint);
             string host = endpoint.Offline ? "in-headset" : endpoint.Host;
@@ -340,6 +461,20 @@ namespace OmniBot.VR.App
 
             teleopController.SetLink(null);
             if (teleopController.IsTeleopActive) teleopController.StopTeleop();
+            // A stand-in transport already carries teleop and must not also open a
+            // socket or wait on a rosbridge preflight. The headset scene leaves
+            // linkProvider empty, so this is RosBridgeLink and preflight dials it.
+            if (!teleopController.PublishesViaRosBridge)
+            {
+                PreflightGate.Allow();
+                teleopController.StartTeleop(_pendingProfile);
+                ShowTeleop();
+                PaintSessionBanners(endpoint.Kind);
+                if (onboarding != null)
+                    onboarding.ShowIfFirstTime(teleopController.DriveHint, teleopController.ManipHint);
+                return;
+            }
+
             PreflightGate.Hold(endpoint.Kind);
             ConnectionManager.Instance.ConnectEndpoint(endpoint);
             EnsurePreflight();
@@ -418,9 +553,10 @@ namespace OmniBot.VR.App
                 var parent = garagePanel != null ? garagePanel.transform.parent : transform;
                 var go = new GameObject("Session Page", typeof(RectTransform));
                 go.transform.SetParent(parent, false);
-                if (garagePanel != null)
+                // Headset garage pages are UI rects. A plain object (the play-mode
+                // harness) has no RectTransform; reading one throws MissingComponentException.
+                if (garagePanel != null && garagePanel.TryGetComponent<RectTransform>(out var src))
                 {
-                    var src = garagePanel.GetComponent<RectTransform>();
                     var dst = (RectTransform)go.transform;
                     dst.anchorMin = src.anchorMin;
                     dst.anchorMax = src.anchorMax;

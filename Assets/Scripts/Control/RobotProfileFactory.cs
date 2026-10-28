@@ -1,5 +1,10 @@
+using System;
 using System.Collections.Generic;
+using OmniBot.VR.Core;
 using OmniBot.VR.Core.Platform;
+using OmniBot.VR.Mapping;
+using DescriptorCeilings = OmniBot.VR.Descriptor.DescriptorCeilings;
+using LatchedRobotDescriptor = OmniBot.VR.Descriptor.RobotDescriptor;
 
 namespace OmniBot.VR.Control
 {
@@ -19,31 +24,10 @@ namespace OmniBot.VR.Control
     /// </summary>
     public static class RobotProfileFactory
     {
-        // ── SO-101 6-DOF arm — the OhhO reference arm (mirrors robot-config.ts) ──
-        public static readonly JointSpec[] So101Joints =
-        {
-            new JointSpec("arm_shoulder_pan",  "Pan",   -3.14f, 3.14f, 0f),
-            new JointSpec("arm_shoulder_lift", "Lift",  -1.57f, 1.57f, 0f),
-            new JointSpec("arm_elbow_flex",    "Elbow", -1.57f, 1.57f, 0f),
-            new JointSpec("arm_wrist_flex",    "Wrist", -1.57f, 1.57f, 0f),
-            new JointSpec("arm_wrist_roll",    "Roll",  -3.14f, 3.14f, 0f),
-            new JointSpec("arm_gripper",       "Grip",  -0.1f,  0.8f,  0f),
-        };
-
-        // SO-101 link lengths (metres, from CAD) — used for the hand→arm reach mapping.
-        private const float So101Link1 = 0.117f;
-        private const float So101Link2 = 0.133f;
-        private const float So101Link3 = 0.080f;
-        private const float So101BaseHeight = 0.350f;
-
-        // SO-101 link lengths array (for the generic FABRIK solver).
-        private static readonly float[] So101LinkLengths = { So101Link1, So101Link2, So101Link3 };
-
-        // Generic default link length when a flagship arm's geometry is unknown.
-        private const float GenericLinkLength = 0.10f;
-
-        // Hand-tracking workspace radius (matches the old RobotConfig constant).
-        private const float HandWorkspaceRadius = 0.40f;
+        // SO-101 joint specs. Names, limits, link lengths, and kinematic zeros
+        // are RobotDescriptor.So101. Homes add so101_joint_zeros.json offsets,
+        // which ship as 0 until OHH-94 sets calibrated=true.
+        public static JointSpec[] So101Joints => CreateSo101Joints();
 
         /// <summary>
         /// Derive a profile from a resolved garage robot. Returns null only if the
@@ -61,7 +45,167 @@ namespace OmniBot.VR.Control
 
             var profile = Derive(hw, robot.RobotType, category);
             ApplyFlagshipOverride(profile, modelId, category);
+            profile.Deployment = ArmDeploymentRules.FromGarageStatus(robot.UserRobot != null ? robot.UserRobot.Status : null);
+            profile.MaxJointDeltaRad = RobotDescriptor.MaxJointDeltaRad;
+            bool so101Family = modelId == "so101-arm" || modelId == "omnibot" || modelId == "omnibot-pro";
+            profile.JointZerosCalibrated = so101Family && So101JointZeroConfig.Load().Calibrated;
+            SealCatalogCaps(profile);
             return profile;
+        }
+
+        /// <summary>
+        /// SO-101 joints from <see cref="RobotDescriptor"/> plus the loaded
+        /// radian offsets. Uncalibrated configs contribute 0.
+        /// </summary>
+        public static JointSpec[] CreateSo101Joints()
+        {
+            return CreateSo101Joints(So101JointZeroConfig.Load().OffsetsRad);
+        }
+
+        /// <summary>
+        /// Builds SO-101 joints from <see cref="RobotDescriptor"/> and adds
+        /// <paramref name="offsetsRad"/> to the kinematic zeros. Null offsets
+        /// leave the URDF zero unchanged.
+        /// </summary>
+        public static JointSpec[] CreateSo101Joints(float[] offsetsRad)
+        {
+            var d = RobotDescriptor.So101;
+            var joints = new JointSpec[d.JointCount];
+            for (int i = 0; i < d.JointCount; i++)
+            {
+                float home = d.JointZeroRad[i];
+                if (offsetsRad != null && i < offsetsRad.Length) home += offsetsRad[i];
+                joints[i] = new JointSpec(d.JointNames[i], d.JointLabels[i], d.JointMin[i], d.JointMax[i], home);
+            }
+            return joints;
+        }
+
+        /// <summary>
+        /// Build a profile from a connected robot's latched descriptor. This is
+        /// preferred over <see cref="FromGarageRobot"/> whenever a document has
+        /// been received. <paramref name="catalogFallback"/> supplies fields the
+        /// descriptor does not name (arm command topics, link lengths) for the
+        /// same robot, and any tighter speed it already has is kept.
+        /// Returns the fallback when the descriptor is missing its hard caps —
+        /// missing caps are not treated as unlimited.
+        /// The joint step also feeds <see cref="RobotProfile.MaxJointDeltaRad"/>
+        /// so the arm-enable limiter cannot outrun the descriptor cap.
+        /// </summary>
+        public static RobotProfile FromDescriptor(LatchedRobotDescriptor descriptor)
+            => FromDescriptor(descriptor, null);
+
+        public static RobotProfile FromDescriptor(LatchedRobotDescriptor descriptor, RobotProfile catalogFallback)
+        {
+            if (descriptor?.Safety?.Hard == null || descriptor.Drive?.Caps == null || descriptor.Topics == null)
+                return catalogFallback;
+
+            var hard = descriptor.Safety.Hard;
+            var caps = descriptor.Drive.Caps;
+            var drive = ParseDescriptorDrive(descriptor.Drive.Kind);
+            bool fixedBase = drive == DriveKind.FixedBase;
+            bool sameRobot = SameRobot(catalogFallback, descriptor);
+
+            float maxLin = fixedBase ? 0f : Cap(caps.VxMps, hard.MaxVxMps, RobotConfig.MAX_LINEAR_VEL);
+            float maxLat = fixedBase ? 0f : Cap(caps.VyMps, hard.MaxVyMps, RobotConfig.MAX_LINEAR_VEL);
+            float maxAng = fixedBase ? 0f : Cap(caps.WzRadS, hard.MaxWzRadS, RobotConfig.MAX_ANGULAR_VEL);
+            if (!descriptor.Drive.Holonomic) maxLat = 0f;
+
+            if (sameRobot)
+            {
+                maxLin = MinPositive(maxLin, catalogFallback.HardMaxLinVel > 0f
+                    ? catalogFallback.HardMaxLinVel : catalogFallback.MaxLinVel);
+                maxAng = MinPositive(maxAng, catalogFallback.HardMaxAngVel > 0f
+                    ? catalogFallback.HardMaxAngVel : catalogFallback.MaxAngVel);
+                if (descriptor.Drive.Holonomic)
+                    maxLat = MinPositive(maxLat, catalogFallback.HardMaxLatVel > 0f
+                        ? catalogFallback.HardMaxLatVel : catalogFallback.MaxLatVel);
+            }
+
+            var joints = JointsFromDescriptor(descriptor);
+            if (sameRobot && catalogFallback.HardJoints != null &&
+                catalogFallback.HardJoints.Length == joints.Length)
+            {
+                joints = IntersectJoints(joints, catalogFallback.HardJoints);
+            }
+
+            var spec = DriveSpecs.Get(drive);
+            bool hasArm = joints.Length > 0;
+            var topics = TopicsFromDescriptor(descriptor, fixedBase);
+            if (sameRobot && catalogFallback.Topics != null)
+                CopyCatalogOnlyTopics(topics, catalogFallback.Topics);
+
+            float[] linkLengths = null;
+            float armBase = 0f;
+            float armReach = 0f;
+            float workspace = RobotDescriptor.So101.HandWorkspaceRadius;
+            var ik = IkLocation.Headset;
+            if (sameRobot)
+            {
+                linkLengths = catalogFallback.ArmLinkLengths;
+                armBase = catalogFallback.ArmBaseHeight;
+                armReach = catalogFallback.ArmMaxReach;
+                if (catalogFallback.HandWorkspaceRadius > 0f)
+                    workspace = catalogFallback.HandWorkspaceRadius;
+                ik = catalogFallback.IkLocation;
+            }
+
+            if (hasArm && (linkLengths == null || linkLengths.Length == 0) && IsSo101(descriptor))
+            {
+                linkLengths = (float[])RobotDescriptor.So101.LinkLengths.Clone();
+                armBase = RobotDescriptor.So101.BaseHeight;
+                armReach = RobotDescriptor.So101.Reach;
+            }
+
+            float jointStep = Cap(hard.MaxJointStepRad, hard.MaxJointStepRad, DescriptorCeilings.MaxJointStepRad);
+            float jointDelta = RobotDescriptor.ClampJointDelta(jointStep);
+            if (sameRobot && catalogFallback.MaxJointDeltaRad > 0f && catalogFallback.MaxJointDeltaRad < jointDelta)
+                jointDelta = catalogFallback.MaxJointDeltaRad;
+
+            return new RobotProfile
+            {
+                RobotId = descriptor.Id,
+                Name = descriptor.Model,
+                Manufacturer = sameRobot ? catalogFallback.Manufacturer : "",
+                Category = sameRobot ? catalogFallback.Category : "",
+                Drive = drive,
+                DriveLabel = spec.Label,
+                Holonomic = descriptor.Drive.Holonomic && !fixedBase,
+                BaseDof = fixedBase ? 0 : spec.BaseDof,
+                BaseActionLabels = spec.ActionLabels,
+                MaxLinVel = maxLin,
+                MaxLatVel = maxLat,
+                MaxAngVel = maxAng,
+                HardMaxLinVel = maxLin,
+                HardMaxLatVel = maxLat,
+                HardMaxAngVel = maxAng,
+                HardMaxAccelLin = fixedBase ? 0f : Cap(
+                    Math.Min(hard.MaxAccelXMps2, hard.MaxAccelYMps2),
+                    Math.Min(hard.MaxAccelXMps2, hard.MaxAccelYMps2),
+                    DescriptorCeilings.MaxAccelLinMps2),
+                HardMaxAccelYaw = fixedBase ? 0f : Cap(hard.MaxAccelWzRadS2, hard.MaxAccelWzRadS2, DescriptorCeilings.MaxAccelYawRadS2),
+                HardMaxJointStep = jointStep,
+                HasArm = hasArm,
+                ArmDof = joints.Length,
+                Joints = joints,
+                HardJoints = CloneJoints(joints),
+                CanNavigate = !fixedBase && spec.BaseDof > 0,
+                CanManipulate = hasArm,
+                IsAerial = false,
+                IsUnderwater = sameRobot && catalogFallback.IsUnderwater,
+                IsStationary = fixedBase || spec.BaseDof == 0,
+                IsLegged = drive == DriveKind.Quadruped || drive == DriveKind.Bipedal,
+                IsDualArm = descriptor.Arms != null && descriptor.Arms.Length > 1,
+                IkLocation = ik,
+                Topics = topics,
+                HandWorkspaceRadius = workspace,
+                ArmBaseHeight = armBase,
+                ArmMaxReach = armReach,
+                ArmLinkLengths = linkLengths,
+                MaxJointDeltaRad = jointDelta,
+                Deployment = sameRobot ? catalogFallback.Deployment : ArmDeployment.Real,
+                CapsFromDescriptor = true,
+                UrdfUrl = descriptor.UrdfUrl,
+            };
         }
 
         // ── Derivation (mirrors deriveRobotConfig) ──────────────────────────────
@@ -117,10 +261,12 @@ namespace OmniBot.VR.Control
                 IsDualArm = category == "humanoid",
                 IkLocation = IkLocation.Headset, // default: solve in Unity
                 Topics = BuildTopics(spec.BaseDof, hasArm, category, jointStatesTopic),
-                HandWorkspaceRadius = HandWorkspaceRadius,
-                ArmBaseHeight = hasArm ? So101BaseHeight : 0f,
-                ArmMaxReach = hasArm ? So101Link1 + So101Link2 + So101Link3 : 0f,
-                ArmLinkLengths = hasArm ? (float[])So101LinkLengths.Clone() : null,
+                HandWorkspaceRadius = RobotDescriptor.So101.HandWorkspaceRadius,
+                ArmBaseHeight = hasArm ? RobotDescriptor.So101.BaseHeight : 0f,
+                ArmMaxReach = hasArm ? RobotDescriptor.So101.Reach : 0f,
+                ArmLinkLengths = hasArm ? (float[])RobotDescriptor.So101.LinkLengths.Clone() : null,
+                MaxJointDeltaRad = RobotDescriptor.MaxJointDeltaRad,
+                Deployment = ArmDeployment.Real,
             };
         }
 
@@ -130,13 +276,21 @@ namespace OmniBot.VR.Control
             {
                 CmdVel        = baseDof > 0 ? "/cmd_vel/teleop" : "",
                 ControlMode   = "/control_mode",
+                ControlModeActive = "/control_mode/active",
+                ArmModeActive = "/arm/cmd_mode/active",
                 ArmCommands   = hasArm ? "/arm/joint_commands" : "",
                 ArmEnable     = hasArm ? "/arm/enable" : "",
                 EmergencyStop = "/emergency_stop",
                 IkTargetPose  = hasArm ? "/servo_server/target_pose" : "",
+                RecordStart   = "/vr/record_start",
+                RecordStop    = "/vr/record_stop",
                 Odom          = baseDof > 0 ? "/odom" : "",
                 Imu           = "/imu/data",
                 JointStates   = jointStates,
+                Map           = MapTopics.DefaultMap,
+                Scan          = MapTopics.DefaultScan,
+                GlobalCostmap = MapTopics.DefaultGlobalCostmap,
+                LocalCostmap  = MapTopics.DefaultLocalCostmap,
             };
             // Image topics by category (mirrors deriveSensors image list)
             if (category == "mobile-manipulator")
@@ -156,25 +310,25 @@ namespace OmniBot.VR.Control
             {
                 case "omnibot":
                 case "omnibot-pro":
-                    p.Joints = (JointSpec[])So101Joints.Clone();
+                    p.Joints = CreateSo101Joints();
                     p.ArmDof = 6;
                     p.MaxLinVel = 0.2f;
                     p.MaxAngVel = 1.0f;
-                    p.ArmBaseHeight = So101BaseHeight;
-                    p.ArmMaxReach = So101Link1 + So101Link2 + So101Link3;
-                    p.ArmLinkLengths = (float[])So101LinkLengths.Clone();
+                    p.ArmBaseHeight = RobotDescriptor.So101.BaseHeight;
+                    p.ArmMaxReach = RobotDescriptor.So101.Reach;
+                    p.ArmLinkLengths = (float[])RobotDescriptor.So101.LinkLengths.Clone();
                     p.IsDualArm = false;
                     // OmniBot publishes arm commands + enables on the arm_ topics.
-                    p.Topics.ArmCommands = "/arm/joint_commands";
+                    p.Topics.ArmCommands = "/arm/joint_commands/teleop";
                     p.Topics.ArmEnable = "/arm/enable";
                     p.Topics.JointStates = "/arm/joint_states";
                     break;
                 case "so101-arm":
-                    p.Joints = (JointSpec[])So101Joints.Clone();
+                    p.Joints = CreateSo101Joints();
                     p.ArmDof = 6;
-                    p.ArmBaseHeight = So101BaseHeight;
-                    p.ArmMaxReach = So101Link1 + So101Link2 + So101Link3;
-                    p.ArmLinkLengths = (float[])So101LinkLengths.Clone();
+                    p.ArmBaseHeight = RobotDescriptor.So101.BaseHeight;
+                    p.ArmMaxReach = RobotDescriptor.So101.Reach;
+                    p.ArmLinkLengths = (float[])RobotDescriptor.So101.LinkLengths.Clone();
                     break;
                 case "ur5e":
                     // UR5e: 6-DOF, 850 mm reach. Link lengths approximate from UR spec.
@@ -236,6 +390,186 @@ namespace OmniBot.VR.Control
             for (int i = 0; i < n; i++)
                 outJ[i] = new JointSpec($"joint_{i + 1}", i < labels.Length ? labels[i] : $"J{i + 1}", -3.14f, 3.14f, 0f);
             return outJ;
+        }
+
+        // ── Descriptor helpers ────────────────────────────────────────────────────
+
+        private static void SealCatalogCaps(RobotProfile profile)
+        {
+            if (profile == null) return;
+            profile.HardMaxLinVel = profile.MaxLinVel;
+            profile.MaxLatVel = profile.Holonomic ? profile.MaxLinVel : 0f;
+            profile.HardMaxLatVel = profile.MaxLatVel;
+            profile.HardMaxAngVel = profile.MaxAngVel;
+            if (profile.HardMaxJointStep <= 0f)
+                profile.HardMaxJointStep = (float)DescriptorCeilings.MaxJointStepRad;
+            profile.HardJoints = CloneJoints(profile.Joints);
+            profile.CapsFromDescriptor = false;
+        }
+
+        private static bool SameRobot(RobotProfile catalog, LatchedRobotDescriptor descriptor)
+        {
+            if (catalog == null || descriptor == null || string.IsNullOrEmpty(catalog.RobotId))
+                return false;
+            if (string.Equals(catalog.RobotId, descriptor.Id, StringComparison.OrdinalIgnoreCase))
+                return true;
+            return descriptor.Id == "omnibot" &&
+                   (catalog.RobotId == "omnibot" || catalog.RobotId == "omnibot-pro");
+        }
+
+        private static DriveKind ParseDescriptorDrive(string kind)
+        {
+            switch (kind)
+            {
+                case "mecanum": return DriveKind.Mecanum;
+                case "differential": return DriveKind.Differential;
+                case "ackermann": return DriveKind.Ackermann;
+                case "skid-steer": return DriveKind.SkidSteer;
+                case "tracked": return DriveKind.Tracked;
+                case "quadruped": return DriveKind.Quadruped;
+                case "bipedal": return DriveKind.Bipedal;
+                case "fixed-base": return DriveKind.FixedBase;
+                default: return DriveKind.Unknown;
+            }
+        }
+
+        private static float Cap(double advertised, double hard, double ceiling)
+        {
+            double value = advertised;
+            if (hard < value) value = hard;
+            if (ceiling < value) value = ceiling;
+            if (value < 0 || double.IsNaN(value) || double.IsInfinity(value)) value = 0;
+            // Snap values that sit on a ceiling so a binary 0.2 cannot round above the cap.
+            if (ceiling - value <= 1e-6) return (float)ceiling;
+            return (float)value;
+        }
+
+        private static float MinPositive(float value, float other)
+        {
+            if (other > 0f && other < value) return other;
+            return value;
+        }
+
+        private static JointSpec[] JointsFromDescriptor(LatchedRobotDescriptor descriptor)
+        {
+            if (descriptor.Arms == null || descriptor.Arms.Length == 0)
+                return Array.Empty<JointSpec>();
+
+            int count = 0;
+            foreach (var arm in descriptor.Arms)
+                if (arm?.Joints != null) count += arm.Joints.Length;
+
+            var joints = new JointSpec[count];
+            int index = 0;
+            foreach (var arm in descriptor.Arms)
+            {
+                if (arm?.Joints == null) continue;
+                foreach (var joint in arm.Joints)
+                {
+                    float min = (float)joint.Min;
+                    float max = (float)joint.Max;
+                    if (min > max)
+                    {
+                        float swap = min;
+                        min = max;
+                        max = swap;
+                    }
+
+                    float home = MathfClamp((float)joint.Home, min, max);
+                    joints[index++] = new JointSpec(joint.Name, joint.Label, min, max, home);
+                }
+            }
+
+            return joints;
+        }
+
+        private static JointSpec[] IntersectJoints(JointSpec[] descriptorJoints, JointSpec[] tighter)
+        {
+            var result = new JointSpec[descriptorJoints.Length];
+            for (int i = 0; i < descriptorJoints.Length; i++)
+            {
+                var joint = descriptorJoints[i];
+                float min = joint.Min;
+                float max = joint.Max;
+                if (i < tighter.Length)
+                {
+                    if (tighter[i].Min > min) min = tighter[i].Min;
+                    if (tighter[i].Max < max) max = tighter[i].Max;
+                    if (min > max)
+                    {
+                        min = tighter[i].Min;
+                        max = tighter[i].Max;
+                    }
+                }
+
+                float home = MathfClamp(joint.Home, min, max);
+                result[i] = new JointSpec(joint.Name, joint.Label, min, max, home);
+            }
+
+            return result;
+        }
+
+        private static JointSpec[] CloneJoints(JointSpec[] joints)
+        {
+            if (joints == null || joints.Length == 0) return Array.Empty<JointSpec>();
+            var copy = new JointSpec[joints.Length];
+            Array.Copy(joints, copy, joints.Length);
+            return copy;
+        }
+
+        private static RobotTopics TopicsFromDescriptor(LatchedRobotDescriptor descriptor, bool fixedBase)
+        {
+            var images = new List<string>();
+            if (descriptor.Topics.Images != null)
+                images.AddRange(descriptor.Topics.Images);
+
+            return new RobotTopics
+            {
+                // fixed-base must not be commanded, even if the document names a cmd topic.
+                CmdVel = fixedBase ? "" : descriptor.Topics.Cmd,
+                EmergencyStop = descriptor.Topics.Estop,
+                Odom = descriptor.Topics.State,
+                Heartbeat = descriptor.Topics.Heartbeat,
+                Telemetry = descriptor.Topics.Telemetry,
+                Images = images,
+            };
+        }
+
+        private static void CopyCatalogOnlyTopics(RobotTopics target, RobotTopics catalog)
+        {
+            target.ControlMode = catalog.ControlMode;
+            target.ControlModeActive = catalog.ControlModeActive;
+            target.ArmModeActive = catalog.ArmModeActive;
+            target.ArmCommands = catalog.ArmCommands;
+            target.ArmEnable = catalog.ArmEnable;
+            target.IkTargetPose = catalog.IkTargetPose;
+            target.Imu = catalog.Imu;
+            target.JointStates = catalog.JointStates;
+            target.RecordStart = catalog.RecordStart;
+            target.RecordStop = catalog.RecordStop;
+            target.Map = catalog.Map;
+            target.Scan = catalog.Scan;
+            target.GlobalCostmap = catalog.GlobalCostmap;
+            target.LocalCostmap = catalog.LocalCostmap;
+        }
+
+        private static bool IsSo101(LatchedRobotDescriptor descriptor)
+        {
+            if (descriptor.Arms == null) return false;
+            foreach (var arm in descriptor.Arms)
+            {
+                if (arm != null && string.Equals(arm.Name, "so101", StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static float MathfClamp(float value, float min, float max)
+        {
+            if (value < min) return min;
+            if (value > max) return max;
+            return value;
         }
     }
 }
