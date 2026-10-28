@@ -1,6 +1,7 @@
 using System;
 using UnityEngine;
 using OmniBot.VR.Core;
+using OmniBot.VR.Control.Preflight;
 using OmniBot.VR.Input;
 using OmniBot.VR.UI;
 using OmniBot.VR.Video;
@@ -210,6 +211,16 @@ namespace OmniBot.VR.Control
         {
             if (profile == null) { Debug.LogWarning("[TeleopController] StartTeleop called with null profile."); return; }
 
+            // Preflight holds real robots until safety checks pass. Stop publishes
+            // zero velocity through the existing drive path and does not clear an
+            // e-stop, the deadman, or a speed cap.
+            if (PreflightGate.BlocksMotion)
+            {
+                StopTeleop();
+                Debug.LogWarning("[TeleopController] Real teleop stays stopped until connection preflight is clear.");
+                return;
+            }
+
             StopTeleop();
 
             Profile = profile;
@@ -302,6 +313,23 @@ namespace OmniBot.VR.Control
             if (Application.isPlaying)
                 _aerialClient.ConnectLoopback();
         }
+
+        /// <summary>
+        /// Use this transport for the next session. Null restores the ROSBridge link.
+        /// The in-headset demo passes an <see cref="OfflineKinematicLink"/>, which
+        /// never opens a socket to a real robot.
+        /// </summary>
+        public void SetLink(IRobotLink link)
+        {
+            _link = link ?? ResolveLink();
+        }
+
+        /// <summary>
+        /// True when commands go out through <see cref="RosBridgeLink"/>.
+        /// An assigned transport such as the play-mode fake link is false, so a
+        /// session must not also open a rosbridge socket.
+        /// </summary>
+        public bool PublishesViaRosBridge => (_link ?? ResolveLink()) is RosBridgeLink;
 
         private void EnsureWorkspaceOrigin(RobotProfile profile)
         {
