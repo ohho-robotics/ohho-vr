@@ -39,6 +39,8 @@ namespace OmniBot.VR.Video
         // ── State ─────────────────────────────────────────────────────────────
         private RobotProfile _profile;
         private List<string> _cameras = new List<string>();
+        private List<string> _videoUrls = new List<string>();
+        private bool _offline;
         private int _currentIndex;
         private IVideoSource _activeSource;
         private string _robotIp;
@@ -102,6 +104,13 @@ namespace OmniBot.VR.Video
         {
             _profile = profile;
             _cameras = profile?.Topics?.Images ?? new List<string>();
+            var endpoint = OmniBot.VR.Control.Session.ActiveSession.Current;
+            _videoUrls = endpoint?.VideoUrls != null
+                ? new List<string>(endpoint.VideoUrls)
+                : new List<string>();
+            _offline = endpoint != null && endpoint.Offline;
+            if (endpoint != null && !string.IsNullOrEmpty(endpoint.Host))
+                _robotIp = endpoint.Host;
             _currentIndex = 0;
             HasVideoFrame = false;
             StartCurrentCamera();
@@ -110,18 +119,22 @@ namespace OmniBot.VR.Video
         /// <summary>Advances to the next camera. WebRTC tracks already negotiated are swapped in place.</summary>
         public void CycleCamera()
         {
-            if (_cameras.Count == 0) return;
-            _currentIndex = (_currentIndex + 1) % _cameras.Count;
+            int count = CameraCount;
+            if (count == 0) return;
+            _currentIndex = (_currentIndex + 1) % count;
             ShowOrRestart();
         }
 
         /// <summary>Switches to a specific camera by index.</summary>
         public void SetCamera(int index)
         {
-            if (_cameras.Count == 0) return;
-            _currentIndex = Mathf.Clamp(index, 0, _cameras.Count - 1);
+            int count = CameraCount;
+            if (count == 0) return;
+            _currentIndex = Mathf.Clamp(index, 0, count - 1);
             ShowOrRestart();
         }
+
+        private int CameraCount => Mathf.Max(_cameras.Count, _videoUrls.Count);
 
         // ── Private helpers ────────────────────────────────────────────────────
 
@@ -150,7 +163,14 @@ namespace OmniBot.VR.Video
             _activeSource = null;
             HasVideoFrame = false;
 
-            if (_cameras.Count == 0)
+            if (_offline)
+            {
+                ShowNoSignal();
+                if (cameraNameOverlay != null) cameraNameOverlay.text = "In-headset offline";
+                return;
+            }
+
+            if (_cameras.Count == 0 && _videoUrls.Count == 0)
             {
                 ActiveTransport = null;
                 ShowNoSignal();
@@ -160,7 +180,9 @@ namespace OmniBot.VR.Video
                 return;
             }
 
-            string topic = CurrentTopic();
+            string topic = _cameras.Count > 0
+                ? _cameras[Mathf.Clamp(_currentIndex, 0, _cameras.Count - 1)]
+                : (_videoUrls.Count > 0 ? _videoUrls[Mathf.Clamp(_currentIndex, 0, _videoUrls.Count - 1)] : "camera");
             List<string> trackNames = WebRtcTracks.NamesForTopics(_cameras);
             string currentName = WebRtcTracks.NameForTopic(topic);
             bool wantWebRtc = VideoTransportChoice.Select(preferWebRtc, WebRtcVideoSource.IsAvailable)
@@ -214,7 +236,13 @@ namespace OmniBot.VR.Video
                 Debug.LogWarning($"[CameraFeedController] MJPEG error: {err}");
                 ShowNoSignal();
             };
-            mjpeg.Start(_robotIp, topic);
+            if (_videoUrls.Count > 0)
+            {
+                int urlIndex = Mathf.Clamp(_currentIndex, 0, _videoUrls.Count - 1);
+                mjpeg.StartUrl(_videoUrls[urlIndex]);
+            }
+            else
+                mjpeg.Start(_robotIp, topic);
             _activeSource = mjpeg;
             ShowTransport(topic, mjpeg.TransportName);
         }
