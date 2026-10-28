@@ -45,7 +45,12 @@ namespace OmniBot.VR.Tests
                 Name = "OmniBot Pro",
                 Drive = DriveKind.Mecanum,
                 BaseDof = 3,
+                // SafetyCaps drops vy unless the profile is holonomic with a
+                // lateral cap, the same fields the mecanum spec and factory set.
+                // The diagonal test needs that strafe so the magnitude clamp is visible.
+                Holonomic = true,
                 MaxLinVel = 0.2f,
+                MaxLatVel = 0.2f,
                 MaxAngVel = 1.0f,
                 HasArm = true,
                 ArmDof = 6,
