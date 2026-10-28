@@ -5,8 +5,8 @@ using Newtonsoft.Json.Linq;
 using NUnit.Framework;
 using OmniBot.VR.Control;
 using OmniBot.VR.Core;
-using OmniBot.VR.Descriptor;
 using UnityEngine;
+using LatchedRobotDescriptor = OmniBot.VR.Descriptor.RobotDescriptor;
 
 namespace OmniBot.VR.Tests
 {
@@ -17,10 +17,10 @@ namespace OmniBot.VR.Tests
             return Path.Combine(Application.dataPath, "Scripts", "Editor", "Tests", "Fixtures", name);
         }
 
-        private static RobotDescriptor Load(string fileName)
+        private static LatchedRobotDescriptor Load(string fileName)
         {
             string json = File.ReadAllText(Fixture(fileName));
-            Assert.IsTrue(RobotDescriptor.TryParse(json, out var descriptor, out var error), error);
+            Assert.IsTrue(LatchedRobotDescriptor.TryParse(json, out var descriptor, out var error), error);
             return descriptor;
         }
 
@@ -44,7 +44,7 @@ namespace OmniBot.VR.Tests
         {
             string document = File.ReadAllText(Fixture("omnibot.descriptor.json"));
             string message = new JObject { ["data"] = document }.ToString();
-            Assert.IsTrue(RobotDescriptor.TryParse(message, out var descriptor, out var error), error);
+            Assert.IsTrue(LatchedRobotDescriptor.TryParse(message, out var descriptor, out var error), error);
             Assert.AreEqual("omnibot", descriptor.Id);
             Assert.AreEqual("/cmd_vel", descriptor.Topics.Cmd);
         }
@@ -54,7 +54,7 @@ namespace OmniBot.VR.Tests
         {
             var obj = JObject.Parse(File.ReadAllText(Fixture("omnibot.descriptor.json")));
             obj["extra"] = 1;
-            Assert.IsFalse(RobotDescriptor.TryParse(obj.ToString(), out _, out _));
+            Assert.IsFalse(LatchedRobotDescriptor.TryParse(obj.ToString(), out _, out _));
         }
 
         [Test]
@@ -62,7 +62,7 @@ namespace OmniBot.VR.Tests
         {
             var obj = JObject.Parse(File.ReadAllText(Fixture("omnibot.descriptor.json")));
             obj["safety"]["hard"]["max_vx_mps"] = 0.3;
-            Assert.IsFalse(RobotDescriptor.TryParse(obj.ToString(), out _, out _));
+            Assert.IsFalse(LatchedRobotDescriptor.TryParse(obj.ToString(), out _, out _));
         }
 
         [Test]
@@ -123,7 +123,7 @@ namespace OmniBot.VR.Tests
         public void FromDescriptor_MissingHardCaps_ReturnsCatalogFallback()
         {
             var catalog = new RobotProfile { RobotId = "offline", MaxLinVel = 0.2f };
-            var broken = new RobotDescriptor { Id = "omnibot", Model = "OmniBot" };
+            var broken = new LatchedRobotDescriptor { Id = "omnibot", Model = "OmniBot" };
             Assert.AreSame(catalog, RobotProfileFactory.FromDescriptor(broken, catalog));
         }
 
