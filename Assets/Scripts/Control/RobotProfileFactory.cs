@@ -24,6 +24,15 @@ namespace OmniBot.VR.Control
     /// </summary>
     public static class RobotProfileFactory
     {
+        /// <summary>Headset id for the OHH-243 ACT checkpoint. Matches the Python config.</summary>
+        public const string ActVrSimPickId = "act-vr-sim-pick";
+
+        /// <summary>Local checkpoint path passed to /policy/load and POST /load_model.</summary>
+        public const string ActVrSimPickCheckpoint = "checkpoints/act_vr_sim_pick/best";
+
+        public const string ActVrSimPickModels =
+            "[{\"id\":\"act-vr-sim-pick\",\"label\":\"ACT VR sim pick\",\"checkpoint\":\"checkpoints/act_vr_sim_pick/best\"}]";
+
         // SO-101 joint specs. Names, limits, link lengths, and kinematic zeros
         // are RobotDescriptor.So101. Homes add so101_joint_zeros.json offsets,
         // which ship as 0 until OHH-94 sets calibrated=true.
@@ -212,6 +221,10 @@ namespace OmniBot.VR.Control
                 MaxJointDeltaRad = jointDelta,
                 Deployment = sameRobot ? catalogFallback.Deployment : ArmDeployment.Real,
                 CapsFromDescriptor = true,
+                PolicyModelsFallback = sameRobot && !string.IsNullOrEmpty(catalogFallback.PolicyModelsFallback)
+                    ? catalogFallback.PolicyModelsFallback
+                    : "",
+                ServeBaseUrl = sameRobot ? catalogFallback.ServeBaseUrl ?? "" : "",
                 UrdfUrl = descriptor.UrdfUrl,
                 TelemetryFields = CloneFields(descriptor.Telemetry?.Fields),
             };
@@ -269,6 +282,8 @@ namespace OmniBot.VR.Control
                 IsLegged = isLegged,
                 IsDualArm = category == "humanoid",
                 IkLocation = IkLocation.Headset, // default: solve in Unity
+                PolicyModelsFallback = hasArm ? "act,smolvla,diffusion,openvla" : "",
+                ServeBaseUrl = "",
                 Topics = BuildTopics(spec.BaseDof, hasArm, category, jointStatesTopic),
                 HandWorkspaceRadius = RobotDescriptor.So101.HandWorkspaceRadius,
                 ArmBaseHeight = hasArm ? RobotDescriptor.So101.BaseHeight : 0f,
@@ -296,6 +311,14 @@ namespace OmniBot.VR.Control
                 Odom          = baseDof > 0 ? "/odom" : "",
                 Imu           = "/imu/data",
                 JointStates   = jointStates,
+                ArmCmdMode    = hasArm ? "/arm/cmd_mode" : "",
+                PolicyEnable  = hasArm ? "/policy/enable" : "",
+                PolicyTask    = hasArm ? "/policy/task" : "",
+                PolicyLoad    = hasArm ? "/policy/load" : "",
+                PolicyModels  = hasArm ? "/policy/models" : "",
+                PolicyCmdVel  = hasArm ? "/cmd_vel/vla" : "",
+                AiStatus      = "/ai/status",
+                Telemetry     = "/ohho/telemetry",
                 Map           = MapTopics.DefaultMap,
                 Scan          = MapTopics.DefaultScan,
                 GlobalCostmap = MapTopics.DefaultGlobalCostmap,
@@ -331,6 +354,7 @@ namespace OmniBot.VR.Control
                     p.Topics.ArmCommands = "/arm/joint_commands/teleop";
                     p.Topics.ArmEnable = "/arm/enable";
                     p.Topics.JointStates = "/arm/joint_states";
+                    p.PolicyModelsFallback = ActVrSimPickModels;
                     break;
                 case "so101-arm":
                     p.Joints = CreateSo101Joints();
@@ -572,6 +596,15 @@ namespace OmniBot.VR.Control
             target.Scan = catalog.Scan;
             target.GlobalCostmap = catalog.GlobalCostmap;
             target.LocalCostmap = catalog.LocalCostmap;
+            if (string.IsNullOrEmpty(target.Telemetry))
+                target.Telemetry = catalog.Telemetry;
+            if (!string.IsNullOrEmpty(catalog.ArmCmdMode)) target.ArmCmdMode = catalog.ArmCmdMode;
+            if (!string.IsNullOrEmpty(catalog.PolicyEnable)) target.PolicyEnable = catalog.PolicyEnable;
+            if (!string.IsNullOrEmpty(catalog.PolicyTask)) target.PolicyTask = catalog.PolicyTask;
+            if (!string.IsNullOrEmpty(catalog.PolicyLoad)) target.PolicyLoad = catalog.PolicyLoad;
+            if (!string.IsNullOrEmpty(catalog.PolicyModels)) target.PolicyModels = catalog.PolicyModels;
+            if (!string.IsNullOrEmpty(catalog.PolicyCmdVel)) target.PolicyCmdVel = catalog.PolicyCmdVel;
+            if (!string.IsNullOrEmpty(catalog.AiStatus)) target.AiStatus = catalog.AiStatus;
         }
 
         private static string[] CloneFields(string[] fields)

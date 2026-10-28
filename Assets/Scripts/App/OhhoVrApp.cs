@@ -3,6 +3,7 @@ using OmniBot.VR.Core;
 using OmniBot.VR.Core.Platform;
 using OmniBot.VR.Control;
 using OmniBot.VR.Control.Session;
+using OmniBot.VR.Policy;
 using OmniBot.VR.UI;
 using LatchedRobotDescriptor = OmniBot.VR.Descriptor.RobotDescriptor;
 using OmniBot.VR.UI.Garage;
@@ -257,6 +258,7 @@ namespace OmniBot.VR.App
                 return false;
             }
 
+            PreparePolicyPanel(ActiveSession.Current != null ? ActiveSession.Current.Kind : (SessionKind?)null);
             teleopController.StartTeleop(profile);
             if (showUi) ShowTeleop();
             return true;
@@ -285,6 +287,30 @@ namespace OmniBot.VR.App
             var cal = CalibrationManager.Load(calibrationId);
             CalibrationManager.ApplyTo(profile, cal);
             return profile;
+        }
+
+        /// <summary>
+        /// Attach before StartTeleop so TeleopSessionStarted binds this profile.
+        /// The session picker kind wins when the operator already chose sim or real.
+        /// Otherwise the garage robot status is used.
+        /// </summary>
+        private void PreparePolicyPanel(SessionKind? sessionKind)
+        {
+            if (teleopController == null) return;
+            var policyPanel = PolicyPanelController.FindOrCreate(teleopController);
+            PolicySessionKind kind;
+            if (sessionKind == SessionKind.Sim)
+                kind = PolicySessionKind.Sim;
+            else if (sessionKind == SessionKind.Real)
+                kind = PolicySessionKind.Real;
+            else
+            {
+                string robotStatus = _activeRobot != null && _activeRobot.UserRobot != null
+                    ? _activeRobot.UserRobot.Status
+                    : null;
+                kind = PolicyPanelController.SessionKindForStatus(robotStatus);
+            }
+            policyPanel.PrepareSession(teleopController, kind);
         }
 
         /// <summary>
@@ -451,6 +477,7 @@ namespace OmniBot.VR.App
                 if (_offlineLink == null) _offlineLink = new OfflineKinematicLink();
                 _offlineLink.IsConnected = true;
                 teleopController.SetLink(_offlineLink);
+                PreparePolicyPanel(endpoint.Kind);
                 teleopController.StartTeleop(_pendingProfile);
                 ShowTeleop();
                 PaintSessionBanners(endpoint.Kind);
@@ -467,6 +494,7 @@ namespace OmniBot.VR.App
             if (!teleopController.PublishesViaRosBridge)
             {
                 PreflightGate.Allow();
+                PreparePolicyPanel(endpoint.Kind);
                 teleopController.StartTeleop(_pendingProfile);
                 ShowTeleop();
                 PaintSessionBanners(endpoint.Kind);
@@ -497,6 +525,7 @@ namespace OmniBot.VR.App
                 return;
 
             var kind = ActiveSession.Current != null ? ActiveSession.Current.Kind : SessionKind.Sim;
+            PreparePolicyPanel(kind);
             teleopController.StartTeleop(_pendingProfile);
             ShowTeleop();
             PaintSessionBanners(kind);
