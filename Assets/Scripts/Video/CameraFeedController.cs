@@ -4,23 +4,17 @@ using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 using OmniBot.VR.Control;
+using OmniBot.VR.Control.Session;
 
 namespace OmniBot.VR.Video
 {
     /// <summary>
-    /// Profile-driven camera feed controller — the Phase 4 replacement for the
-    /// legacy <c>CameraFeedViewer</c>. Instead of hardcoded topic names, it reads
-    /// the camera list from <see cref="RobotProfile.Topics.Images"/> (set by
-    /// <see cref="RobotProfileFactory"/> from the catalog), so a drone shows its
-    /// FPV + down cameras, a mobile manipulator shows front + wrist + BEV, and an
-    /// industrial arm shows just its wrist camera — all automatically.
-    ///
-    /// Video transport: tries <see cref="WebRtcVideoSource"/> first when
-    /// <c>preferWebRtc</c> is set and the camera topic maps to an ohho_webrtc
-    /// track. Every mapped camera shares one peer connection. The camera name
-    /// overlay shows WebRTC or MJPEG. If signaling fails, that camera falls
-    /// back to <see cref="MjpegVideoSource"/>. Right thumbstick press cycles
-    /// cameras.
+    /// Profile-driven camera feed. A sim session opens the curved sim screen on
+    /// the chase camera, with a strip for front / wrist / BEV and a wrist
+    /// picture-in-picture. A real session keeps the profile camera order on the
+    /// flat panel. WebRTC is preferred when the topic maps to an ohho_webrtc
+    /// track; otherwise MJPEG runs with off-thread decode. Right thumbstick
+    /// press cycles cameras.
     /// </summary>
     public class CameraFeedController : MonoBehaviour
     {
@@ -36,15 +30,23 @@ namespace OmniBot.VR.Video
         [Tooltip("Optional label that shows WebRTC or MJPEG. When empty, the camera name overlay includes the transport.")]
         [SerializeField] private TMP_Text transportLabel;
 
-        // ── State ─────────────────────────────────────────────────────────────
-        private RobotProfile _profile;
-        private List<string> _cameras = new List<string>();
-        private List<string> _videoUrls = new List<string>();
-        private bool _offline;
-        private int _currentIndex;
-        private IVideoSource _activeSource;
+        private SimScreenPlan _plan;
+        private SimScreenPresenter _presenter;
+        private int _mainIndex;
+        private IVideoSource _mainSource;
+        private MjpegVideoSource _mainMjpeg;
+        private MjpegVideoSource _pipMjpeg;
         private string _robotIp;
+        private bool _configured;
+        private bool _offline;
+        private bool _ipHooked;
+        private bool _inFallback;
+        private bool _hasFrame;
+        private double _frameReceivedAt;
+        private float _statsTimer;
         private int _generation;
+        private readonly StreamFpsCounter _fps = new StreamFpsCounter();
+        private Texture2D _grey;
 
         /// <summary>Active transport, "WebRTC" or "MJPEG", or null when there is no camera.</summary>
         public string ActiveTransport { get; private set; }
@@ -53,53 +55,66 @@ namespace OmniBot.VR.Video
         public event Action<string> OnTransportChanged;
 
         /// <summary>True after at least one decoded frame on the current camera.</summary>
-        public bool HasVideoFrame { get; private set; }
+        public bool HasVideoFrame => _hasFrame;
 
         /// <summary>Realtime clock of the last decoded frame. Video age is now minus this.</summary>
-        public double LastVideoFrameTime { get; private set; }
+        public double LastVideoFrameTime => _frameReceivedAt;
 
         /// <summary>ROS topic of the camera currently selected, or null.</summary>
         public string CurrentCameraTopic
         {
             get
             {
-                if (_cameras == null || _cameras.Count == 0) return null;
-                int idx = _currentIndex;
+                if (_plan == null || _plan.Views == null || _plan.Views.Count == 0) return null;
+                int idx = _mainIndex;
                 if (idx < 0) idx = 0;
-                if (idx >= _cameras.Count) idx = _cameras.Count - 1;
-                return _cameras[idx];
+                if (idx >= _plan.Views.Count) idx = _plan.Views.Count - 1;
+                return _plan.Views[idx].Topic;
             }
         }
 
-        // ── Unity lifecycle ────────────────────────────────────────────────────
-        private void Start()
+        private void Awake()
         {
-            _robotIp = PlayerPrefs.GetString("robot_ip", "192.168.1.101");
-            var conn = OmniBot.VR.Core.ConnectionManager.Instance;
-            if (conn != null) conn.OnRobotIpChanged += OnRobotIpChanged;
+            if (string.IsNullOrEmpty(_robotIp))
+                _robotIp = PlayerPrefs.GetString("robot_ip", "192.168.1.101");
+            EnsurePresenter();
+            HookIp();
+        }
+
+        private void OnEnable()
+        {
+            HookIp();
+            if (_configured) RestartAll();
+        }
+
+        private void OnDisable()
+        {
+            StopAll();
         }
 
         private void OnDestroy()
         {
+            StopAll();
             var conn = OmniBot.VR.Core.ConnectionManager.Instance;
-            if (conn != null) conn.OnRobotIpChanged -= OnRobotIpChanged;
-            _activeSource?.Dispose();
+            if (conn != null && _ipHooked) conn.OnRobotIpChanged -= OnRobotIpChanged;
+            _ipHooked = false;
+            if (_grey != null) Destroy(_grey);
         }
 
         private void Update()
         {
-            _activeSource?.Tick();
+            _mainSource?.Tick();
+            _pipMjpeg?.Tick();
             if (OVRInput.GetDown(OVRInput.Button.SecondaryThumbstick, OVRInput.Controller.RTouch))
                 CycleCamera();
+            _statsTimer += Time.unscaledDeltaTime;
+            if (_statsTimer >= 0.1f)
+            {
+                _statsTimer = 0f;
+                RefreshStats();
+            }
         }
 
-        // ── Public API ─────────────────────────────────────────────────────────
-
-        /// <summary>
-        /// Configure the camera list from the selected robot's profile. Called by
-        /// <see cref="OmniBot.VR.Control.TeleopController"/> (or OhhoVrApp) when
-        /// teleop starts.
-        /// </summary>
         /// <summary>Image topics from the profile. Empty when the descriptor lists none.</summary>
         public static List<string> TopicsFor(RobotProfile profile)
         {
@@ -108,91 +123,144 @@ namespace OmniBot.VR.Video
             return profile.Topics.Images;
         }
 
+        /// <summary>
+        /// Configure from the selected robot. Chase is the default when the
+        /// active session is <see cref="SessionKind.Sim"/>. Session video URLs
+        /// and the offline flag come from <see cref="ActiveSession"/>.
+        /// </summary>
         public void Configure(RobotProfile profile)
         {
-            _profile = profile;
-            _cameras = TopicsFor(profile);
-            var endpoint = OmniBot.VR.Control.Session.ActiveSession.Current;
-            _videoUrls = endpoint?.VideoUrls != null
-                ? new List<string>(endpoint.VideoUrls)
-                : new List<string>();
+            if (string.IsNullOrEmpty(_robotIp))
+                _robotIp = PlayerPrefs.GetString("robot_ip", "192.168.1.101");
+            var endpoint = ActiveSession.Current;
             _offline = endpoint != null && endpoint.Offline;
-            if (endpoint != null && !string.IsNullOrEmpty(endpoint.Host))
-                _robotIp = endpoint.Host;
-            _currentIndex = 0;
-            HasVideoFrame = false;
-            StartCurrentCamera();
+            SessionKind? kind = null;
+            string host = _robotIp;
+            IList<string> urls = null;
+            if (endpoint != null)
+            {
+                kind = endpoint.Kind;
+                if (!string.IsNullOrEmpty(endpoint.Host)) host = endpoint.Host;
+                urls = endpoint.VideoUrls;
+            }
+            IList<string> topics = TopicsFor(profile);
+            _plan = SimScreenPlan.Build(kind, topics, host, urls);
+            _mainIndex = _plan.Views.Count == 0 ? 0 : _plan.DefaultIndex;
+            _configured = true;
+            _hasFrame = false;
+            _fps.Clear();
+            EnsurePresenter();
+            _presenter.Apply(_plan);
+            _presenter.SetSelection(_mainIndex);
+            ApplyLabel();
+            if (isActiveAndEnabled) RestartAll();
         }
 
-        /// <summary>Advances to the next camera. WebRTC tracks already negotiated are swapped in place.</summary>
         public void CycleCamera()
         {
-            int count = CameraCount;
-            if (count == 0) return;
-            _currentIndex = (_currentIndex + 1) % count;
-            ShowOrRestart();
+            if (_plan == null || _plan.Views.Count == 0) return;
+            SetCamera((_mainIndex + 1) % _plan.Views.Count);
         }
 
-        /// <summary>Switches to a specific camera by index.</summary>
         public void SetCamera(int index)
         {
-            int count = CameraCount;
-            if (count == 0) return;
-            _currentIndex = Mathf.Clamp(index, 0, count - 1);
-            ShowOrRestart();
+            if (_plan == null || _plan.Views.Count == 0) return;
+            int next = Mathf.Clamp(index, 0, _plan.Views.Count - 1);
+            if (next == _mainIndex && _mainSource != null) return;
+            int oldPip = _plan.PipIndexFor(_mainIndex);
+            _mainIndex = next;
+            int newPip = _plan.PipIndexFor(_mainIndex);
+            string topic = _plan.Views[_mainIndex].Topic;
+            ApplyLabel();
+            if (_presenter != null) _presenter.SetSelection(_mainIndex);
+            if (!isActiveAndEnabled || _offline) return;
+
+            if (_mainSource is WebRtcVideoSource live && live.TryShow(topic))
+            {
+                ShowTransport(topic, live.TransportName);
+                if (oldPip != newPip)
+                {
+                    StopPip();
+                    StartPip();
+                }
+                else if (_presenter != null)
+                    _presenter.SetPipVisible(newPip >= 0);
+                RefreshStats();
+                return;
+            }
+
+            _hasFrame = false;
+            _fps.Clear();
+            StopMain();
+            StartMain();
+            if (oldPip != newPip)
+            {
+                StopPip();
+                StartPip();
+            }
+            else if (_presenter != null)
+                _presenter.SetPipVisible(newPip >= 0);
+            RefreshStats();
         }
 
-        private int CameraCount => Mathf.Max(_cameras.Count, _videoUrls.Count);
+        private void EnsurePresenter()
+        {
+            if (_presenter != null) return;
+            _presenter = GetComponent<SimScreenPresenter>();
+            if (_presenter == null) _presenter = gameObject.AddComponent<SimScreenPresenter>();
+            _presenter.Bind(this);
+        }
 
-        // ── Private helpers ────────────────────────────────────────────────────
+        private void HookIp()
+        {
+            if (_ipHooked) return;
+            var conn = OmniBot.VR.Core.ConnectionManager.Instance;
+            if (conn == null) return;
+            conn.OnRobotIpChanged += OnRobotIpChanged;
+            _ipHooked = true;
+        }
 
         private void OnRobotIpChanged(string newIp)
         {
             _robotIp = newIp;
-            StartCurrentCamera();
+            if (_plan != null) _plan.RetargetHost(newIp);
+            if (_configured && isActiveAndEnabled) RestartAll();
         }
 
-        private void ShowOrRestart()
+        private void RestartAll()
         {
-            string topic = CurrentTopic();
-            if (_activeSource is WebRtcVideoSource live && live.TryShow(topic))
+            StopAll();
+            if (!_configured || _plan == null) return;
+            ApplyLabel();
+            if (_offline || _plan.Views.Count == 0)
             {
-                ShowTransport(topic, live.TransportName);
+                ShowNoSignal();
+                ClearTransport();
                 return;
             }
-            StartCurrentCamera();
+            _hasFrame = false;
+            _fps.Clear();
+            StartMain();
+            StartPip();
+            if (_presenter != null) _presenter.SetSelection(_mainIndex);
+            RefreshStats();
         }
 
-        private void StartCurrentCamera()
+        private void StartMain()
         {
+            if (_plan == null || _plan.Views.Count == 0) return;
             _generation++;
             int generation = _generation;
-            _activeSource?.Dispose();
-            _activeSource = null;
-            HasVideoFrame = false;
-
-            if (_offline)
+            string topic = _plan.Views[_mainIndex].Topic;
+            var topics = new List<string>();
+            for (int i = 0; i < _plan.Views.Count; i++)
             {
-                ShowNoSignal();
-                if (cameraNameOverlay != null) cameraNameOverlay.text = "In-headset offline";
-                return;
+                if (!string.IsNullOrEmpty(_plan.Views[i].Topic))
+                    topics.Add(_plan.Views[i].Topic);
             }
-
-            if (_cameras.Count == 0 && _videoUrls.Count == 0)
-            {
-                ActiveTransport = null;
-                ShowNoSignal();
-                if (cameraNameOverlay != null) cameraNameOverlay.text = "No cameras";
-                if (transportLabel != null) transportLabel.text = "";
-                OnTransportChanged?.Invoke(null);
-                return;
-            }
-
-            string topic = _cameras.Count > 0
-                ? _cameras[Mathf.Clamp(_currentIndex, 0, _cameras.Count - 1)]
-                : (_videoUrls.Count > 0 ? _videoUrls[Mathf.Clamp(_currentIndex, 0, _videoUrls.Count - 1)] : "camera");
-            List<string> trackNames = WebRtcTracks.NamesForTopics(_cameras);
+            List<string> trackNames = WebRtcTracks.NamesForTopics(topics);
             string currentName = WebRtcTracks.NameForTopic(topic);
+            string host = string.IsNullOrEmpty(_plan.Host) ? _robotIp : _plan.Host;
             bool wantWebRtc = VideoTransportChoice.Select(preferWebRtc, WebRtcVideoSource.IsAvailable)
                     == VideoTransportChoice.WebRtc
                 && currentName != null
@@ -201,108 +269,198 @@ namespace OmniBot.VR.Video
             if (wantWebRtc)
             {
                 var webrtc = new WebRtcVideoSource(this);
-                webrtc.OnFrame += OnVideoFrame;
+                webrtc.OnFrame += OnMainFrame;
                 webrtc.OnError += err =>
                 {
-                    Debug.LogWarning($"[CameraFeedController] WebRTC error: {err}");
-                    FallbackToMjpeg(generation);
+                    Debug.LogWarning("[CameraFeedController] WebRTC error: " + err);
+                    if (generation != _generation) return;
+                    FallbackToMjpeg();
                 };
-                _activeSource = webrtc;
+                _mainSource = webrtc;
+                _mainMjpeg = null;
                 ShowTransport(topic, webrtc.TransportName);
-                webrtc.StartTracks(_robotIp, trackNames);
-                if (_activeSource == webrtc)
+                webrtc.StartTracks(host, trackNames);
+                if (_mainSource == webrtc)
                     webrtc.TryShow(topic);
-                Debug.Log($"[CameraFeedController] Starting WebRTC for {string.Join(",", trackNames)}");
+                Debug.Log("[CameraFeedController] Starting WebRTC for " + string.Join(",", trackNames));
                 return;
             }
-
-            StartMjpeg(topic);
+            StartMainMjpeg();
         }
 
-        private void FallbackToMjpeg(int generation)
+        private void FallbackToMjpeg()
         {
-            if (generation != _generation) return;
+            if (_inFallback) return;
+            _inFallback = true;
             _generation++;
-            string topic = CurrentTopic();
-            Debug.Log($"[CameraFeedController] Falling back to MJPEG for {topic}");
-            _activeSource?.Dispose();
-            _activeSource = null;
-            if (string.IsNullOrEmpty(topic))
+            Debug.Log("[CameraFeedController] Falling back to MJPEG");
+            StopMain();
+            StartMainMjpeg();
+            _inFallback = false;
+        }
+
+        private void StartMainMjpeg()
+        {
+            if (_plan == null || _plan.Views.Count == 0) return;
+            string topic = _plan.Views[_mainIndex].Topic;
+            string url = _plan.UrlFor(_mainIndex, SimScreenCameras.MainQuality, SimScreenCameras.MainWidth);
+            if (string.IsNullOrEmpty(url))
             {
                 ShowNoSignal();
+                ClearTransport();
                 return;
             }
-            StartMjpeg(topic);
-        }
-
-        private void StartMjpeg(string topic)
-        {
             var mjpeg = new MjpegVideoSource(this);
-            mjpeg.OnFrame += OnVideoFrame;
+            mjpeg.JpegQuality = SimScreenCameras.MainQuality;
+            mjpeg.JpegWidth = SimScreenCameras.MainWidth;
+            mjpeg.OnFrame += OnMainFrame;
             mjpeg.OnError += err =>
             {
-                Debug.LogWarning($"[CameraFeedController] MJPEG error: {err}");
+                Debug.LogWarning("[CameraFeedController] MJPEG " + err);
                 ShowNoSignal();
             };
-            if (_videoUrls.Count > 0)
-            {
-                int urlIndex = Mathf.Clamp(_currentIndex, 0, _videoUrls.Count - 1);
-                mjpeg.StartUrl(_videoUrls[urlIndex]);
-            }
-            else
-                mjpeg.Start(_robotIp, topic);
-            _activeSource = mjpeg;
+            mjpeg.StartUrl(url);
+            _mainSource = mjpeg;
+            _mainMjpeg = mjpeg;
             ShowTransport(topic, mjpeg.TransportName);
+            Debug.Log("[CameraFeedController] MJPEG " + _plan.Views[_mainIndex].Label + " " + url);
         }
 
-        private string CurrentTopic()
+        private void StartPip()
         {
-            if (_cameras.Count == 0) return null;
-            int idx = Mathf.Clamp(_currentIndex, 0, _cameras.Count - 1);
-            return _cameras[idx];
+            if (_plan == null) return;
+            int pip = _plan.PipIndexFor(_mainIndex);
+            if (_presenter != null) _presenter.SetPipVisible(pip >= 0);
+            if (pip < 0) return;
+            string url = _plan.UrlFor(pip, SimScreenCameras.PipQuality, SimScreenCameras.PipWidth);
+            if (string.IsNullOrEmpty(url)) return;
+            var mjpeg = new MjpegVideoSource(this);
+            mjpeg.JpegQuality = SimScreenCameras.PipQuality;
+            mjpeg.JpegWidth = SimScreenCameras.PipWidth;
+            mjpeg.OnFrame += OnPipFrame;
+            mjpeg.OnError += err =>
+            {
+                Debug.LogWarning("[CameraFeedController] Wrist PiP " + err);
+                if (_presenter != null) _presenter.SetPipVisible(false);
+            };
+            mjpeg.StartUrl(url);
+            _pipMjpeg = mjpeg;
+        }
+
+        private void StopAll()
+        {
+            StopMain();
+            StopPip();
+        }
+
+        private void StopMain()
+        {
+            if (_mainSource != null)
+            {
+                _mainSource.OnFrame -= OnMainFrame;
+                _mainSource.Dispose();
+                _mainSource = null;
+            }
+            _mainMjpeg = null;
+        }
+
+        private void StopPip()
+        {
+            if (_pipMjpeg != null)
+            {
+                _pipMjpeg.OnFrame -= OnPipFrame;
+                _pipMjpeg.Dispose();
+                _pipMjpeg = null;
+            }
+            if (_presenter != null) _presenter.SetPipVisible(false);
+        }
+
+        private void OnMainFrame(Texture2D frame)
+        {
+            _hasFrame = true;
+            double now = Time.realtimeSinceStartupAsDouble;
+            _fps.Mark(now);
+            _frameReceivedAt = _mainMjpeg != null && _mainMjpeg.HasPresentedFrame
+                ? _mainMjpeg.LastFrameReceivedAt
+                : now;
+            if (displayImage != null)
+            {
+                displayImage.color = Color.white;
+                displayImage.texture = frame;
+            }
+            if (_presenter != null) _presenter.SetMainTexture(frame);
+            RefreshStats();
+        }
+
+        private void OnPipFrame(Texture2D frame)
+        {
+            if (_presenter != null) _presenter.SetPipTexture(frame);
         }
 
         private void ShowTransport(string topic, string transport)
         {
             ActiveTransport = transport;
-            if (transportLabel != null)
+            if (transportLabel != null) transportLabel.text = transport ?? "";
+            ApplyLabel();
+            if (transportLabel == null && cameraNameOverlay != null && !string.IsNullOrEmpty(transport))
             {
-                transportLabel.text = transport;
-                if (cameraNameOverlay != null) cameraNameOverlay.text = topic;
-            }
-            else if (cameraNameOverlay != null)
-            {
-                cameraNameOverlay.text = VideoHud.Label(topic, transport);
+                string label = cameraNameOverlay.text;
+                cameraNameOverlay.text = string.IsNullOrEmpty(label)
+                    ? VideoHud.Label(topic, transport)
+                    : label + "  " + transport;
             }
             OnTransportChanged?.Invoke(transport);
         }
 
-        private void OnVideoFrame(Texture2D frame)
+        private void ClearTransport()
         {
-            HasVideoFrame = true;
-            LastVideoFrameTime = Time.realtimeSinceStartupAsDouble;
-            if (displayImage != null)
-            {
-                displayImage.color = Color.white; // full brightness once streaming
-                displayImage.texture = frame;
-            }
+            ActiveTransport = null;
+            if (transportLabel != null) transportLabel.text = "";
+            OnTransportChanged?.Invoke(null);
         }
 
         private void ShowNoSignal()
         {
-            if (displayImage == null) return;
-            displayImage.color = new Color(0.02f, 0.03f, 0.06f, 1f); // dark idle state
-            if (noSignalTexture != null)
-                displayImage.texture = noSignalTexture;
-            else
+            _hasFrame = false;
+            Texture tex = noSignalTexture != null ? (Texture)noSignalTexture : Grey();
+            if (displayImage != null)
             {
-                var grey = new Texture2D(64, 64);
-                var pixels = new Color[64 * 64];
-                for (int i = 0; i < pixels.Length; i++) pixels[i] = new Color(0.2f, 0.2f, 0.2f);
-                grey.SetPixels(pixels);
-                grey.Apply();
-                displayImage.texture = grey;
+                displayImage.color = new Color(0.02f, 0.03f, 0.06f, 1f);
+                displayImage.texture = tex;
             }
+            if (_presenter != null)
+            {
+                _presenter.SetMainTexture(null);
+                _presenter.SetStats(StreamOverlay.Format(0f, 0f, false));
+            }
+        }
+
+        private void ApplyLabel()
+        {
+            string label;
+            if (_offline) label = "In-headset offline";
+            else if (_plan == null || _plan.Views.Count == 0) label = "No cameras";
+            else label = _plan.Views[Mathf.Clamp(_mainIndex, 0, _plan.Views.Count - 1)].Label;
+            if (cameraNameOverlay != null) cameraNameOverlay.text = label;
+        }
+
+        private void RefreshStats()
+        {
+            if (_presenter == null) return;
+            double now = Time.realtimeSinceStartupAsDouble;
+            float age = _hasFrame ? StreamOverlay.AgeMilliseconds(_frameReceivedAt, now) : 0f;
+            _presenter.SetStats(StreamOverlay.Format(_fps.Fps(now), age, _hasFrame));
+        }
+
+        private Texture2D Grey()
+        {
+            if (_grey != null) return _grey;
+            _grey = new Texture2D(4, 4, TextureFormat.RGB24, false, false);
+            var pixels = new Color[16];
+            for (int i = 0; i < pixels.Length; i++) pixels[i] = new Color(0.2f, 0.2f, 0.2f);
+            _grey.SetPixels(pixels);
+            _grey.Apply(false, false);
+            return _grey;
         }
     }
 }
