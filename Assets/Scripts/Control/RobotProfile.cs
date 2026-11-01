@@ -194,6 +194,19 @@ namespace OmniBot.VR.Control
         /// </summary>
         public IkLocation IkLocation;
 
+        /// <summary>
+        /// Comma-separated policy ids used when serve <c>GET /models</c> is
+        /// unavailable. Mirrors a <c>policy_models</c> ROS param and the lerobot
+        /// registry (<c>act</c>, <c>smolvla</c>, <c>diffusion</c>, <c>openvla</c>).
+        /// </summary>
+        public string PolicyModelsFallback;
+
+        /// <summary>
+        /// OhhO Serve origin, for example <c>http://192.168.1.101:8000</c>.
+        /// Empty means the policy panel uses the connected robot IP on port 8000.
+        /// </summary>
+        public string ServeBaseUrl;
+
         /// <summary>package:// or http URL from the descriptor. Empty on the catalog path.</summary>
         public string UrdfUrl;
 
@@ -227,6 +240,16 @@ namespace OmniBot.VR.Control
         public string Heartbeat;        // descriptor topics.heartbeat
         public string Telemetry;        // descriptor topics.telemetry
         public List<string> Images = new List<string>();
+
+        // Policy panel (OHH-229). Empty skips that publish or subscribe.
+        // Telemetry and ControlModeActive are declared above.
+        public string ArmCmdMode;          // std_msgs/String — /arm/cmd_mode ("policy")
+        public string PolicyEnable;        // std_msgs/Bool — /policy/enable
+        public string PolicyTask;          // std_msgs/String — /policy/task
+        public string PolicyLoad;          // std_msgs/String — /policy/load (checkpoint)
+        public string PolicyModels;        // std_msgs/String — latched model list
+        public string PolicyCmdVel;        // geometry_msgs/Twist — /cmd_vel/vla
+        public string AiStatus;            // std_msgs/String — /ai/status
 
         // Optional perception topics for the SLAM map panel. Blank fields fall
         // back to the OmniBot names (/map, /scan, Nav2 costmaps). OHH-228.
