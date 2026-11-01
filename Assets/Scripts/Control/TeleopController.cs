@@ -1,5 +1,6 @@
 using System;
 using UnityEngine;
+using OmniBot.VR.Comfort;
 using OmniBot.VR.Core;
 using OmniBot.VR.Control.Preflight;
 using OmniBot.VR.Input;
@@ -141,6 +142,9 @@ namespace OmniBot.VR.Control
                 BothGripsReleased = !bothGrips && _prevBothGrips,
                 DeltaTime = Time.deltaTime,
             };
+            input = ComfortControlMapping.Apply(
+                input,
+                ComfortSettingsStore.Current.LeftHandedControls);
             _prevBothGrips = bothGrips;
 
             // ── Drive ────────────────────────────────────────────────────────────
