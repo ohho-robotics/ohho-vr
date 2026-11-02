@@ -80,6 +80,7 @@ namespace OmniBot.VR.Tests
         public void HmdUnmounted_StopsHeartbeat_AndWatchdogZerosWithin350ms()
         {
             var input = Forward(0.1f);
+            input.LeftGrip = true;
             _session.Start(_link);
             _session.Tick(_link, ref input, _drive, null, null);
             Assert.Greater(LastLinearX(_link), 0.05f);
@@ -153,6 +154,7 @@ namespace OmniBot.VR.Tests
         public void Reconnect_StaysStillUntilDeadmanRepress()
         {
             var input = Forward(0.1f);
+            input.LeftGrip = true;
             _session.Start(_link);
             _session.Tick(_link, ref input, _drive, null, null);
             Assert.Greater(LastLinearX(_link), 0.05f);
@@ -163,6 +165,7 @@ namespace OmniBot.VR.Tests
 
             _link.IsConnected = true;
             int mark = _link.Published.Count;
+            input.LeftGrip = false;
             input.DeltaTime = 0.1f;
             _session.Tick(_link, ref input, _drive, null, null);
 
@@ -213,6 +216,7 @@ namespace OmniBot.VR.Tests
         public void LatchedSafetyState_BlocksDrive_AndShowsTripReason()
         {
             var input = Forward(0.1f);
+            input.LeftGrip = true;
             _session.Start(_link);
             _session.Tick(_link, ref input, _drive, null, null);
             Assert.Greater(LastLinearX(_link), 0.05f);
@@ -234,6 +238,7 @@ namespace OmniBot.VR.Tests
         public void DisarmedWithoutLatch_DoesNotBlockDrive()
         {
             var input = Forward(0.1f);
+            input.LeftGrip = true;
             _session.Start(_link);
             _link.Push(OhhoSafetyContract.SafetyStateTopic,
                 "{\"armed\":false,\"latched\":false,\"reason\":\"heartbeat_watchdog\"}");

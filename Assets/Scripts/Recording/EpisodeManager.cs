@@ -26,7 +26,10 @@ namespace OmniBot.VR.Recording
                 if (_instance == null)
                 {
                     GameObject go = new GameObject("EpisodeManager");
-                    DontDestroyOnLoad(go);
+                    // StartTeleop configures this singleton from edit-mode tests.
+                    // DontDestroyOnLoad is legal only while the player is running.
+                    if (Application.isPlaying)
+                        DontDestroyOnLoad(go);
                     _instance = go.AddComponent<EpisodeManager>();
                 }
                 return _instance;
@@ -58,7 +61,8 @@ namespace OmniBot.VR.Recording
         {
             if (_instance != null && _instance != this) { Destroy(gameObject); return; }
             _instance = this;
-            DontDestroyOnLoad(gameObject);
+            if (Application.isPlaying)
+                DontDestroyOnLoad(gameObject);
         }
 
         private void Update()

@@ -19,8 +19,10 @@ namespace OmniBot.VR.PlayMode
     /// <summary>
     /// Drives the real headset flow against <see cref="FakeRobotLink"/>:
     /// login stub, console, garage, add-robot picker, simulate on that link,
-    /// teleop, both-grips e-stop. Supabase, rosbridge, and the Quest runtime
-    /// are not contacted.
+    /// teleop, both-grips e-stop. The stop stays latched until an explicit left-X
+    /// re-arm. A grip release does not clear it, and the base stays still until
+    /// one grip (the deadman) is held again. Supabase, rosbridge, and the Quest
+    /// runtime are not contacted.
     /// </summary>
     public static class OperatorFlowHarness
     {
@@ -120,10 +122,23 @@ namespace OmniBot.VR.PlayMode
                 result.EStopTrueCount = link.CountBool(EmergencyStop, true);
                 result.NonZeroWhileHeld = link.CountNonZeroTwist(CmdVel);
 
+                // Grip release must not publish emergency_stop false.
                 Tick(drive, link, Stick(0f, 0f), grips: false, press: false, release: true);
+                result.EStopFalseBeforeReset = link.CountBool(EmergencyStop, false);
+
+                // Deadman held and sticks deflected, still before the reset.
+                // A false published on release would let this tick drive.
+                Tick(drive, link, Stick(1f, 1f, 1f), leftGrip: true, rightGrip: false, press: false, release: false);
+                result.NonZeroBeforeReset = link.CountNonZeroTwist(CmdVel);
+
+                // Left X is the re-arm. Sticks stay centered so the clear itself
+                // does not command motion.
+                Tick(drive, link, Stick(0f, 0f), leftGrip: false, rightGrip: false, press: false, release: false, reset: true);
                 result.EStopFalseCount = link.CountBool(EmergencyStop, false);
 
-                Tick(drive, link, Stick(1f, 1f, 1f), grips: false, press: false, release: false);
+                // Deadman (left grip, not turbo) plus full sticks. Motion is
+                // allowed only after the explicit reset.
+                Tick(drive, link, Stick(1f, 1f, 1f), leftGrip: true, rightGrip: false, press: false, release: false);
                 var resume = link.LastTwist(CmdVel);
                 if (resume != null)
                 {
@@ -149,6 +164,9 @@ namespace OmniBot.VR.PlayMode
                 result.TeleopInactiveAfterStop = !teleop.IsTeleopActive;
                 log.Append("estopTrue=").Append(result.EStopTrueCount)
                     .Append(" nonZeroWhileHeld=").Append(result.NonZeroWhileHeld)
+                    .Append(" estopFalseBeforeReset=").Append(result.EStopFalseBeforeReset)
+                    .Append(" nonZeroBeforeReset=").Append(result.NonZeroBeforeReset)
+                    .Append(" estopFalse=").Append(result.EStopFalseCount)
                     .Append(" resumeX=").Append(result.ResumeLinearX);
             }
             catch (System.Exception ex)
@@ -348,7 +366,7 @@ namespace OmniBot.VR.PlayMode
             Tick(drive, link, left, grips, grips, press, release);
         }
 
-        static void Tick(IDriveScheme drive, FakeRobotLink link, Vector2 left, bool leftGrip, bool rightGrip, bool press, bool release)
+        static void Tick(IDriveScheme drive, FakeRobotLink link, Vector2 left, bool leftGrip, bool rightGrip, bool press, bool release, bool reset = false)
         {
             var input = new TeleopInput
             {
@@ -359,6 +377,7 @@ namespace OmniBot.VR.PlayMode
                 BothGrips = leftGrip && rightGrip,
                 BothGripsPressed = press,
                 BothGripsReleased = release,
+                ResetEmergencyStop = reset,
                 DeltaTime = Step,
             };
             drive.Tick(ref input, link);
@@ -511,6 +530,8 @@ namespace OmniBot.VR.PlayMode
         public int DeadZoneAddedNonZero = -1;
         public int EStopTrueCount = -1;
         public int NonZeroWhileHeld = -1;
+        public int EStopFalseBeforeReset = -1;
+        public int NonZeroBeforeReset = -1;
         public int EStopFalseCount = -1;
         public float ResumeLinearX = float.NaN;
         public float ResumeLinearY = float.NaN;

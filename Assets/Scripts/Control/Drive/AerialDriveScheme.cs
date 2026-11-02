@@ -18,7 +18,7 @@ namespace OmniBot.VR.Control.Drive
     public sealed class AerialDriveScheme : DriveSchemeBase
     {
         public override string HudHint =>
-            "Left Y: climb · Left X: yaw nose-right · Right stick: forward/right · Grip: deadman · Both grips: e-stop · Takeoff/Land: buttons";
+            "Left Y: climb · Left X: yaw nose-right · Right stick: forward/right · Grip: deadman · Both grips: e-stop (latched until left X) · Takeoff/Land: buttons";
 
         protected override string IdleMode => "offboard";
 
@@ -94,19 +94,28 @@ namespace OmniBot.VR.Control.Drive
         {
             if (!IsConfigured || Profile == null) return;
 
+            // Sim-serve has its own grip deadman. The Ohho e-stop is also the
+            // latched base stop: both grips set it, and releasing the grips
+            // does not clear it. Left X does.
+            if (input.BothGrips && !EmergencyStopActive)
+                TriggerEmergencyStop(link);
+            else if (input.ResetEmergencyStop && EmergencyStopActive && !input.BothGrips)
+                ClearEmergencyStop(link);
+
+            bool latched = EmergencyStopActive;
             var mapped = new AerialMappingInput
             {
                 RobotId = Profile.RobotId,
                 RobotName = Profile.Name,
                 MaxLinVel = Profile.MaxLinVel,
                 MaxAngVel = Profile.MaxAngVel,
-                LeftX = input.LeftStick.x,
-                LeftY = input.LeftStick.y,
-                RightX = input.RightStick.x,
-                RightY = input.RightStick.y,
-                LeftGrip = input.LeftGrip,
-                RightGrip = input.RightGrip,
-                PendingFlight = _pending,
+                LeftX = latched ? 0f : input.LeftStick.x,
+                LeftY = latched ? 0f : input.LeftStick.y,
+                RightX = latched ? 0f : input.RightStick.x,
+                RightY = latched ? 0f : input.RightStick.y,
+                LeftGrip = latched || input.LeftGrip,
+                RightGrip = latched || input.RightGrip,
+                PendingFlight = latched ? null : _pending,
             };
             AerialTeleopCommand cmd = AerialDriveMapping.Map(mapped);
             if (cmd.Estop)
@@ -140,12 +149,17 @@ namespace OmniBot.VR.Control.Drive
         public override void Stop(IRobotLink link)
         {
             _pending = null;
+            // A latched e-stop must still be asserted. Sending the released
+            // (deadman false, estop false) message would clear it on sim-serve.
+            bool latched = EmergencyStopActive;
             var released = new AerialMappingInput
             {
                 RobotId = Profile != null ? Profile.RobotId : null,
                 RobotName = Profile != null ? Profile.Name : null,
                 MaxLinVel = Profile != null ? Profile.MaxLinVel : 0f,
                 MaxAngVel = Profile != null ? Profile.MaxAngVel : 0f,
+                LeftGrip = latched,
+                RightGrip = latched,
             };
             AerialTeleopCommand cmd = AerialDriveMapping.Map(released);
             LastCommand = cmd;
@@ -162,7 +176,8 @@ namespace OmniBot.VR.Control.Drive
         {
             // Base.Tick dead-zones first and would apply turbo. Aerial Tick does
             // not call it. This override keeps the abstract contract on the same
-            // signs, still with no turbo.
+            // signs, still with no turbo. The grip deadman and the latched
+            // e-stop live in Tick, not in this twist helper.
             _ = speedMult;
             AerialAxes axes = AerialDriveMapping.ScaleDeadzoned(
                 lx, ly, rx, ry, Profile.MaxLinVel, Profile.MaxAngVel);
