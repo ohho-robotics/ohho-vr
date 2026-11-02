@@ -127,8 +127,9 @@ One persistent GameObject holding the platform services (each is a singleton):
    notice (and the deadman tutorial the first time) before an announced robot
    or a manual IP. `OhhoVrApp` then builds the `RobotProfile` and hands it to
    `TeleopController`. The teleop page opens with a blue **SIM** or orange **REAL** banner.
-   - **Base:** left stick strafe (vx/vy), right stick X yaw, right grip turbo,
-     both grips e-stop.
+   - **Base:** left stick strafe (vx/vy), right stick X yaw, hold one grip to
+     drive (deadman, on by default), right grip turbo clamped to 0.2 m/s,
+     both grips latched e-stop (left X resets; releasing the grips does not).
    - **Arm:** Left X requests enable (a real robot needs a second Left X
      before `/arm/enable`). A left-hand thumbs-up (hold 0.5 s) requests enable
      or turns the arm off and never confirms a real robot. Hold the right index

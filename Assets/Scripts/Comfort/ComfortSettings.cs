@@ -144,7 +144,7 @@ namespace OmniBot.VR.Comfort
 
     /// <summary>
     /// Swaps thumbstick and grip roles for a left-handed driver.
-    /// Both-grips emergency-stop edges are copied unchanged.
+    /// Both-grips emergency-stop edges and the explicit e-stop reset are copied unchanged.
     /// </summary>
     public static class ComfortControlMapping
     {
@@ -164,6 +164,7 @@ namespace OmniBot.VR.Comfort
                 BothGrips = input.BothGrips,
                 BothGripsPressed = input.BothGripsPressed,
                 BothGripsReleased = input.BothGripsReleased,
+                ResetEmergencyStop = input.ResetEmergencyStop,
                 DeltaTime = input.DeltaTime,
             };
         }
