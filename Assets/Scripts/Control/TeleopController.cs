@@ -87,6 +87,7 @@ namespace OmniBot.VR.Control
         // ── Previous both-grips state for edge detection ─────────────────────────
         private bool _prevBothGrips;
         private bool _ownsLatencyCapture;
+        private SimServeAerialClient _aerialClient;
 
         // ── Unity lifecycle ──────────────────────────────────────────────────────
         private void OnEnable()
@@ -126,7 +127,10 @@ namespace OmniBot.VR.Control
 
         private void Update()
         {
-            if (!_teleopActive || !Link.IsConnected) return;
+            if (!_teleopActive) return;
+            bool linkUp = Link.IsConnected;
+            bool aerialUp = _drive is AerialDriveScheme && _aerialClient != null && _aerialClient.IsConnected;
+            if (!linkUp && !aerialUp) return;
             if (LatencyCapture.IsEnabled)
                 LatencyCapture.MarkInputSample();
 
@@ -162,8 +166,9 @@ namespace OmniBot.VR.Control
 
             // ── Manipulation (hand poses) ────────────────────────────────────────
             // Runs without a GestureDetector so controller jog and the enable
-            // button still work when hand tracking is absent.
-            if (_manip != null)
+            // button still work when hand tracking is absent. Aerial sim-serve
+            // can be up while the robot link is down; arm commands wait for the link.
+            if (linkUp && _manip != null)
             {
                 HandPose rightHand = default;
                 HandPose leftHand = default;
@@ -239,6 +244,7 @@ namespace OmniBot.VR.Control
             if (profile.HasArm)
                 EnsureWorkspaceOrigin(profile);
             _drive = ControlSchemeFactory.CreateDriveScheme(profile);
+            AttachAerialClient(_drive);
             _manip = ControlSchemeFactory.CreateManipulationScheme(profile, handWorkspaceOrigin);
             if (profile.HasArm)
                 EnsureWorkspaceVisual(profile);
@@ -265,7 +271,9 @@ namespace OmniBot.VR.Control
         public void StopTeleop()
         {
             if (!_teleopActive && _drive == null && _manip == null) return;
+            bool aerial = _drive is AerialDriveScheme;
             _drive?.Stop(Link);
+            if (aerial && _aerialClient != null) _aerialClient.Disconnect();
             _manip?.Stop(Link);
             _drive = null;
             _manip = null;
@@ -292,6 +300,38 @@ namespace OmniBot.VR.Control
 
         /// <summary>Whether a robot is currently being teleoperated.</summary>
         public bool IsTeleopActive => _teleopActive;
+
+        /// <summary>
+        /// Takeoff button. The phrase has to match before anything is queued.
+        /// Stick motion cannot call this.
+        /// </summary>
+        public bool RequestAerialTakeoff(string confirmation)
+        {
+            var aerial = _drive as AerialDriveScheme;
+            if (aerial == null) return false;
+            return aerial.TryTakeoff(confirmation);
+        }
+
+        /// <summary>Land button. Refuses until the confirmation phrase matches.</summary>
+        public bool RequestAerialLand(string confirmation)
+        {
+            var aerial = _drive as AerialDriveScheme;
+            if (aerial == null) return false;
+            return aerial.TryLand(confirmation);
+        }
+
+        void AttachAerialClient(IDriveScheme drive)
+        {
+            var aerial = drive as AerialDriveScheme;
+            if (aerial == null) return;
+            if (_aerialClient == null)
+                _aerialClient = GetComponent<SimServeAerialClient>();
+            if (_aerialClient == null)
+                _aerialClient = gameObject.AddComponent<SimServeAerialClient>();
+            aerial.UseSender(_aerialClient);
+            if (Application.isPlaying)
+                _aerialClient.ConnectLoopback();
+        }
 
         /// <summary>
         /// Use this transport for the next session. Null restores the ROSBridge link.
