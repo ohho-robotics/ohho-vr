@@ -10,6 +10,7 @@ using OmniBot.VR.Recording;
 using OmniBot.VR.Control.Drive;
 using OmniBot.VR.Control.Manip;
 using OmniBot.VR.Control.Safety;
+using OmniBot.VR.Latency;
 
 namespace OmniBot.VR.Control
 {
@@ -110,6 +111,7 @@ namespace OmniBot.VR.Control
 
         // ── Previous both-grips state for edge detection ─────────────────────────
         private bool _prevBothGrips;
+        private bool _ownsLatencyCapture;
         private TeleopInput _lastInput;
         private SimServeAerialClient _aerialClient;
         // Set when the operator drops out. Aerial sim-serve does not use the
@@ -142,6 +144,15 @@ namespace OmniBot.VR.Control
         {
             if (gestureDetector == null)
                 gestureDetector = FindObjectOfType<GestureDetector>();
+            _ownsLatencyCapture = LatencyCapture.TryStartFromEnvironment();
+            if (_ownsLatencyCapture)
+                LatencyCaptureHooks.EnsureCommandAckSubscription();
+        }
+
+        private void OnDestroy()
+        {
+            if (_ownsLatencyCapture)
+                LatencyCapture.StopAndWrite();
         }
 
         private void OnApplicationPause(bool paused)
@@ -215,6 +226,15 @@ namespace OmniBot.VR.Control
             // A HUD reconnect to another ip:port must not keep this scheme blocked.
             ReleaseLatchIfEndpointChanged();
 
+            bool linkUp = Link != null && Link.IsConnected;
+            bool aerialScheme = _drive is AerialDriveScheme;
+            bool aerialUp = aerialScheme && _aerialClient != null && _aerialClient.IsConnected;
+            // Sample before ReadInput, and only while a link that can move is up.
+            // Do not return here: heartbeat, the safety latch, and the deadman
+            // still tick when the robot link is down.
+            if ((linkUp || aerialUp) && LatencyCapture.IsEnabled)
+                LatencyCapture.MarkInputSample();
+
             var input = ReadInput();
             _lastInput = input;
 
@@ -224,10 +244,6 @@ namespace OmniBot.VR.Control
                 Raise(EmergencyStopChanged, true);
             else if (input.BothGripsReleased)
                 Raise(EmergencyStopChanged, false);
-
-            bool linkUp = Link != null && Link.IsConnected;
-            bool aerialScheme = _drive is AerialDriveScheme;
-            bool aerialUp = aerialScheme && _aerialClient != null && _aerialClient.IsConnected;
 
             // Heartbeat, latched e-stop, and the ground deadman always run.
             // Aerial is omitted from this tick: safety only drives while the
@@ -455,6 +471,8 @@ namespace OmniBot.VR.Control
             Profile = null;
             _wasThumbsUp = false;
             _thumbsUpHoldTimer = 0f;
+            if (LatencyCapture.IsEnabled)
+                LatencyCapture.ClearInputSample();
             _thumbsUpPulse = false;
             if (_workspaceVisual != null)
             {

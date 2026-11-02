@@ -1,6 +1,7 @@
 using System;
 using System.Threading.Tasks;
 using UnityEngine;
+using OmniBot.VR.Latency;
 using LatchedRobotDescriptor = OmniBot.VR.Descriptor.RobotDescriptor;
 
 namespace OmniBot.VR.Core
@@ -168,6 +169,8 @@ namespace OmniBot.VR.Core
                 _onDescriptorMessage = OnDescriptorMessage;
             ROSBridgeClient.Instance.Subscribe(
                 LatchedRobotDescriptor.Topic, LatchedRobotDescriptor.MessageType, _onDescriptorMessage);
+
+            LatencyCaptureHooks.EnsureCommandAckSubscription();
 
             OnConnectionStateChanged?.Invoke(true);
             OnRobotIpChanged?.Invoke(CurrentIp);

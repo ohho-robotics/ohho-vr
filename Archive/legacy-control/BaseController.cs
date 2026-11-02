@@ -6,6 +6,7 @@
 using UnityEngine;
 using OmniBot.VR.Core;
 using OmniBot.VR.Control.Drive;
+using OmniBot.VR.Latency;
 
 namespace OmniBot.VR.Input
 {
@@ -95,6 +96,8 @@ namespace OmniBot.VR.Input
             _prevBothGrips = bothGrips;
 
             if (_emergencyStopActive) return;
+            if (LatencyCapture.IsEnabled)
+                LatencyCapture.MarkInputSample();
 
             // ── Read thumbsticks ─────────────────────────────────────────────
             Vector2 leftStick  = OVRInput.Get(OVRInput.Axis2D.PrimaryThumbstick,   OVRInput.Controller.LTouch);

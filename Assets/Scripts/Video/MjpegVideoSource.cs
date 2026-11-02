@@ -3,6 +3,7 @@ using System.Collections;
 using System.Threading;
 using UnityEngine;
 using UnityEngine.Networking;
+using OmniBot.VR.Latency;
 
 namespace OmniBot.VR.Video
 {
@@ -23,6 +24,9 @@ namespace OmniBot.VR.Video
 
         public string TransportName => "MJPEG";
         public bool IsStreaming => _coroutine != null;
+
+        /// <summary>Unix ms from an <c>OHHO_CAP:</c> marker on the latest frame, if present.</summary>
+        public long? LastCaptureUnixMs { get; private set; }
         public event Action<Texture2D> OnFrame;
         public event Action<string> OnError;
 
@@ -49,6 +53,8 @@ namespace OmniBot.VR.Video
         private int _pendingH;
         private double _pendingAt;
         private bool _hasPending;
+        private long? _pendingCaptureUnixMs;
+        private bool _pendingCaptureEnabled;
         private bool _decodeBusy;
         private bool _disposed;
         private volatile int _generation;
@@ -211,6 +217,8 @@ namespace OmniBot.VR.Video
                     return;
                 _workerRgb = rgb;
                 if (generation != _generation || _disposed) return;
+                bool captureEnabled = LatencyCapture.IsEnabled;
+                long? captureUnixMs = captureEnabled ? JpegCaptureStamp.TryReadUnixMs(jpeg) : null;
                 int bytes = w * h * 3;
                 lock (_gate)
                 {
@@ -220,6 +228,8 @@ namespace OmniBot.VR.Video
                     _pendingW = w;
                     _pendingH = h;
                     _pendingAt = receivedAt;
+                    _pendingCaptureEnabled = captureEnabled;
+                    _pendingCaptureUnixMs = captureUnixMs;
                     _hasPending = true;
                 }
             }
@@ -239,12 +249,16 @@ namespace OmniBot.VR.Video
             int w;
             int h;
             double at;
+            long? captureUnixMs;
+            bool captureEnabled;
             lock (_gate)
             {
                 if (!_hasPending || _pending == null) return;
                 w = _pendingW;
                 h = _pendingH;
                 at = _pendingAt;
+                captureUnixMs = _pendingCaptureUnixMs;
+                captureEnabled = _pendingCaptureEnabled;
                 int bytes = w * h * 3;
                 // LoadRawTextureData(byte[]) requires the array length to match the texture.
                 if (_upload == null || _upload.Length != bytes) _upload = new byte[bytes];
@@ -252,6 +266,11 @@ namespace OmniBot.VR.Video
                 pending = _upload;
                 _hasPending = false;
             }
+
+            if (LatencyCapture.IsEnabled && captureEnabled)
+                LastCaptureUnixMs = captureUnixMs;
+            else
+                LastCaptureUnixMs = null;
 
             if (_texture == null || _texture.width != w || _texture.height != h)
             {
