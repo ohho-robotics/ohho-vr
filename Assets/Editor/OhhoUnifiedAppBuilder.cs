@@ -14,6 +14,7 @@ using OmniBot.VR.UI.Auth;
 using OmniBot.VR.UI.Console;
 using OmniBot.VR.UI.Garage;
 using OmniBot.VR.UI.Operate;
+using OmniBot.VR.UI.Session;
 using OmniBot.VR.UI.Teleop;
 using OmniBot.VR.Video;
 
@@ -340,8 +341,10 @@ namespace OmniBot.VR.Editor
             var login = BuildLoginPage(authScreen.transform);
             var console = BuildConsolePage(authScreen.transform);
             var garage = BuildGaragePage(authScreen.transform);
+            var session = BuildSessionPage(authScreen.transform);
             console.SetActive(false);
             garage.SetActive(false);
+            session.SetActive(false);
 
             var teleop = BuildTeleopPage(teleopScreen.transform);
             teleop.SetActive(false);
@@ -562,7 +565,16 @@ namespace OmniBot.VR.Editor
             return page;
         }
 
-        // -- Teleop / operate dashboard -----------------------------------------
+        // ── Session picker (garage → simulate / drive real → teleop) ─────────
+        private static GameObject BuildSessionPage(Transform parent)
+        {
+            var page = MakePage("Session Page", parent);
+            if (page.GetComponent<SessionPickerPanel>() == null)
+                page.AddComponent<SessionPickerPanel>();
+            return page;
+        }
+
+        // ── Teleop / operate dashboard ────────────────────────────────────────
         private static GameObject BuildTeleopPage(Transform parent)
         {
             var page = new GameObject("Teleop Page", typeof(RectTransform));
@@ -570,6 +582,63 @@ namespace OmniBot.VR.Editor
             Stretch((RectTransform)page.transform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
 
             var dash = OperateDashboard.Build((RectTransform)page.transform);
+            var column = dash.transform.Find("Telemetry Column");
+            Transform safetyParent = column != null ? column : page.transform;
+
+            var safetyBanner = MakePanel("Safety Banner", safetyParent, new Color(0.12f, 0.14f, 0.2f, 0.94f));
+            var safetyBannerRt = safetyBanner.GetComponent<RectTransform>();
+            if (column != null)
+            {
+                FitInColumn(safetyBannerRt, 132f);
+                safetyBanner.transform.SetAsFirstSibling();
+            }
+            else
+                Place(safetyBannerRt, new Vector2(0.5f, 1f), new Vector2(980f, 88f), new Vector2(0f, -12f));
+
+            var safetyStatus = MakeText("Safety Status", safetyBanner.transform, "SAFETY — waiting for /ohho/safety/state", 22, TextMain, TextAlignmentOptions.MidlineLeft);
+            safetyStatus.fontStyle = FontStyles.Bold;
+            if (column != null)
+            {
+                var statusRt = safetyStatus.rectTransform;
+                statusRt.anchorMin = new Vector2(0f, 1f);
+                statusRt.anchorMax = new Vector2(1f, 1f);
+                statusRt.pivot = new Vector2(0.5f, 1f);
+                statusRt.sizeDelta = new Vector2(-16f, 36f);
+                statusRt.anchoredPosition = new Vector2(0f, -6f);
+            }
+            else
+                Place(safetyStatus.rectTransform, new Vector2(0f, 0.5f), new Vector2(520f, 64f), new Vector2(20f, -32f));
+
+            var estopReset = MakeButton("E-Stop Reset", safetyBanner.transform, "Reset e-stop", 18, Danger, TextMain);
+            var estopConfirm = MakeButton("E-Stop Confirm", safetyBanner.transform, "Confirm reset", 18, new Color(0.95f, 0.85f, 0.2f), Color.black);
+            if (column != null)
+            {
+                PlaceColumnButton(estopReset, 0.02f, 0.49f);
+                PlaceColumnButton(estopConfirm, 0.51f, 0.98f);
+            }
+            else
+            {
+                Place(estopReset.GetComponent<RectTransform>(), new Vector2(1f, 0.5f), new Vector2(220f, 56f), new Vector2(-250f, 0f));
+                Place(estopConfirm.GetComponent<RectTransform>(), new Vector2(1f, 0.5f), new Vector2(220f, 56f), new Vector2(-16f, 0f));
+            }
+            estopConfirm.gameObject.SetActive(false);
+
+            var telemetryPanel = MakePanel("Telemetry V2", safetyParent, new Color(0.04f, 0.06f, 0.10f, 0.94f));
+            var telemetryRt = telemetryPanel.GetComponent<RectTransform>();
+            if (column != null)
+                FitInColumn(telemetryRt, 180f);
+            else
+                Place(telemetryRt, new Vector2(0.5f, 0.5f), new Vector2(680f, 860f), new Vector2(40f, 0f));
+            if (column != null)
+                telemetryPanel.transform.SetSiblingIndex(1);
+
+            var telemetryBody = MakeText("Telemetry Body", telemetryPanel.transform, "telemetry", 16, TextMain, TextAlignmentOptions.TopLeft);
+            telemetryBody.richText = true;
+            telemetryBody.enableWordWrapping = true;
+            Stretch(telemetryBody.rectTransform, Vector2.zero, Vector2.one, new Vector2(-24f, -56f), Vector2.zero);
+            var telemetryMode = MakeButton("Telemetry Mode", telemetryPanel.transform, "Expanded", 18, Cyan, Color.black);
+            Place(telemetryMode.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(140f, 36f), new Vector2(-8f, -8f));
+
             var hud = page.AddComponent<TeleopHudController>();
             var hso = new SerializedObject(hud);
             hso.FindProperty("ipField").objectReferenceValue = dash.IpField;
@@ -582,6 +651,9 @@ namespace OmniBot.VR.Editor
             hso.FindProperty("velocityText").objectReferenceValue = dash.VelocityText;
             hso.FindProperty("armText").objectReferenceValue = dash.ArmText;
             hso.FindProperty("modeText").objectReferenceValue = dash.ModeText;
+            hso.FindProperty("telemetryBody").objectReferenceValue = telemetryBody;
+            hso.FindProperty("telemetryModeButton").objectReferenceValue = telemetryMode;
+            hso.FindProperty("telemetryModeLabel").objectReferenceValue = telemetryMode.GetComponentInChildren<TMP_Text>();
             hso.FindProperty("cycleCameraButton").objectReferenceValue = dash.CycleCameraButton;
             hso.FindProperty("cameraFeed").objectReferenceValue = dash.SimFeedController;
             hso.FindProperty("startRecordingButton").objectReferenceValue = dash.StartRecordingButton;
@@ -594,6 +666,10 @@ namespace OmniBot.VR.Editor
             hso.FindProperty("robotNameText").objectReferenceValue = dash.RobotNameText;
             hso.FindProperty("hintsText").objectReferenceValue = dash.HintsText;
             hso.FindProperty("backButton").objectReferenceValue = dash.BackButton;
+            hso.FindProperty("safetyBanner").objectReferenceValue = safetyBanner.GetComponent<Image>();
+            hso.FindProperty("safetyStatusText").objectReferenceValue = safetyStatus;
+            hso.FindProperty("estopResetButton").objectReferenceValue = estopReset;
+            hso.FindProperty("estopConfirmButton").objectReferenceValue = estopConfirm;
             hso.ApplyModifiedPropertiesWithoutUndo();
             return page;
         }
@@ -606,6 +682,7 @@ namespace OmniBot.VR.Editor
             var bootstrap = GameObject.Find("[OhhO VR App]");
             if (bootstrap == null) return;
 
+            // Live input and recording only. Do not attach archived publishers from Archive/legacy-control.
             if (bootstrap.GetComponent<GestureDetector>() == null) bootstrap.AddComponent<GestureDetector>();
             if (bootstrap.GetComponent<ProfileDrivenRecorder>() == null) bootstrap.AddComponent<ProfileDrivenRecorder>();
             if (bootstrap.GetComponent<VRGraphicsBoost>() == null) bootstrap.AddComponent<VRGraphicsBoost>();
@@ -620,6 +697,7 @@ namespace OmniBot.VR.Editor
             var login = authScreen.transform.Find("Login Page")?.gameObject;
             var console = authScreen.transform.Find("Console Page")?.gameObject;
             var garage = authScreen.transform.Find("Garage Page")?.gameObject;
+            var session = authScreen.transform.Find("Session Page")?.gameObject;
             
             var teleop = teleopScreen.transform.Find("Teleop Page")?.gameObject;
             var cameraPage = cameraScreen.transform.Find("Camera Page")?.gameObject;
@@ -639,6 +717,8 @@ namespace OmniBot.VR.Editor
             appSo.FindProperty("loginPanel").objectReferenceValue = login;
             appSo.FindProperty("consolePanel").objectReferenceValue = console;
             appSo.FindProperty("garagePanel").objectReferenceValue = garage;
+            var sessionProp = appSo.FindProperty("sessionPickerPanel");
+            if (sessionProp != null) sessionProp.objectReferenceValue = session;
             appSo.FindProperty("teleopPanel").objectReferenceValue = teleop;
             
             var camProp = appSo.FindProperty("cameraPanel");
@@ -783,6 +863,29 @@ namespace OmniBot.VR.Editor
             rt.pivot = new Vector2(min.x == max.x ? min.x : 0.5f, min.y == max.y ? min.y : 0.5f);
             rt.sizeDelta = size;
             rt.anchoredPosition = pos;
+        }
+
+        private static void FitInColumn(RectTransform rt, float preferredHeight)
+        {
+            rt.anchorMin = new Vector2(0f, 1f);
+            rt.anchorMax = new Vector2(1f, 1f);
+            rt.pivot = new Vector2(0.5f, 1f);
+            rt.sizeDelta = new Vector2(0f, preferredHeight);
+            var le = rt.GetComponent<LayoutElement>();
+            if (le == null) le = rt.gameObject.AddComponent<LayoutElement>();
+            le.preferredHeight = preferredHeight;
+            le.minHeight = preferredHeight;
+            le.flexibleWidth = 1f;
+        }
+
+        private static void PlaceColumnButton(Button button, float xMin, float xMax)
+        {
+            var rt = button.GetComponent<RectTransform>();
+            rt.anchorMin = new Vector2(xMin, 0f);
+            rt.anchorMax = new Vector2(xMax, 0f);
+            rt.pivot = new Vector2(0.5f, 0f);
+            rt.sizeDelta = new Vector2(-8f, 44f);
+            rt.anchoredPosition = new Vector2(0f, 6f);
         }
 
         private static void Place(RectTransform rt, Vector2 anchor, Vector2 size, Vector2 pos)

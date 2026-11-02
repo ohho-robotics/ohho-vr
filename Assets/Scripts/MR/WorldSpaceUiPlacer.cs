@@ -1,4 +1,5 @@
 using UnityEngine;
+using OmniBot.VR.Comfort;
 
 namespace OmniBot.VR.MR
 {
@@ -39,10 +40,49 @@ namespace OmniBot.VR.MR
         /// <summary>Snap in front of the user. Does not unlock a placement lock.</summary>
         public void Recentre() => PlaceInFront();
 
+        private Vector3 _authoredScale = Vector3.one;
+        private bool _hasAuthoredScale;
+
+        private void Awake()
+        {
+            _authoredScale = transform.localScale;
+            _hasAuthoredScale = true;
+        }
+
         private void OnEnable()
         {
+            ComfortSettingsStore.Changed += OnComfortChanged;
+            if (ComfortSettingsStore.HasSaved)
+            {
+                ApplyComfortLayout(ComfortSettingsStore.Current);
+            }
+
             if (hmdCamera == null) hmdCamera = Camera.main;
             if (placeOnEnable) PlaceInFront();
+        }
+
+        private void OnDisable()
+        {
+            ComfortSettingsStore.Changed -= OnComfortChanged;
+        }
+
+        private void OnComfortChanged(ComfortSettings settings)
+        {
+            if (settings == null) return;
+            ApplyComfortLayout(settings);
+            if (isActiveAndEnabled && placeOnEnable) PlaceInFront();
+        }
+
+        private void ApplyComfortLayout(ComfortSettings settings)
+        {
+            if (!_hasAuthoredScale)
+            {
+                _authoredScale = transform.localScale;
+                _hasAuthoredScale = true;
+            }
+
+            distance = settings.ScreenDistanceMeters;
+            transform.localScale = _authoredScale * settings.ScreenSize;
         }
 
         /// <summary>Snap the panel to a comfortable spot in front of the user.</summary>

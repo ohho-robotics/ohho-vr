@@ -15,9 +15,9 @@ namespace OmniBot.VR.UI.Operate
     /// screen, right arm column, bottom controls legend. While it is active the
     /// screen stops billboarding; Recentre snaps it back to 1.6 m in front.
     ///
-    /// The centre slot is the stand-in for OHH-209's sim screen. A
-    /// <see cref="CameraFeedController"/> on that slot shows the feed until
-    /// <c>SimScreenPresenter</c> is mounted on the same object.
+    /// The centre slot hosts the sim screen. <see cref="CameraFeedController"/>
+    /// on that region shows a real session on the flat image, and
+    /// <c>SimScreenPresenter</c> draws the curved chase view inside the slot.
     /// </summary>
     [DisallowMultipleComponent]
     public sealed class OperateDashboard : MonoBehaviour

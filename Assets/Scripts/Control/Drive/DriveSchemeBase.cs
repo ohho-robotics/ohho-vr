@@ -35,12 +35,21 @@ namespace OmniBot.VR.Control.Drive
         protected float NoInputModeTimer;
         protected bool InTeleopMode;
         private bool _publishEStopClear;
+        private float _prevVx, _prevVy, _prevVz, _prevWz;
 
         public bool IsConfigured => Profile != null;
 
         /// <summary>True while a grip stop or the operate-screen latch is holding the base.</summary>
         public bool IsEmergencyStopActive => EmergencyStopActive;
         public abstract string HudHint { get; }
+
+        /// <summary>
+        /// While true, thumbstick velocity is not published. E-stop edges still
+        /// run. <see cref="Safety.TeleopSafetySession"/> sets this when the robot
+        /// e-stop is latched, or until a deadman re-press after link loss or the
+        /// headset coming off. Cleared on <see cref="Configure"/>.
+        /// </summary>
+        public bool SuppressMotion { get; set; }
 
         /// <summary>
         /// Control-mode string published after the idle timeout. Ground robots
@@ -64,6 +73,8 @@ namespace OmniBot.VR.Control.Drive
             NoInputModeTimer = 0f;
             InTeleopMode = false;
             _publishEStopClear = false;
+            SuppressMotion = false;
+            _prevVx = _prevVy = _prevVz = _prevWz = 0f;
         }
 
         /// <summary>
@@ -79,7 +90,7 @@ namespace OmniBot.VR.Control.Drive
             PublishEStopClear(link);
         }
 
-        public void Tick(ref TeleopInput input, IRobotLink link)
+        public virtual void Tick(ref TeleopInput input, IRobotLink link)
         {
             if (!IsConfigured || Profile == null || !link.IsConnected) return;
 
@@ -89,7 +100,27 @@ namespace OmniBot.VR.Control.Drive
             // ── Emergency stop: both grips (rising/falling edge) ───────────────
             HandleEmergencyStop(ref input, link);
             if (HoldUiEStop(link)) return;
-            if (EmergencyStopActive) return;
+            if (EmergencyStopActive)
+            {
+                if (IsPublishing && !string.IsNullOrEmpty(Profile.Topics?.CmdVel))
+                {
+                    link.Publish(Profile.Topics.CmdVel, ZeroTwist());
+                    IsPublishing = false;
+                }
+                return;
+            }
+
+            // Latched safety state, or motion held until a deadman re-press.
+            if (SuppressMotion)
+            {
+                if (IsPublishing && !string.IsNullOrEmpty(Profile.Topics?.CmdVel))
+                {
+                    link.Publish(Profile.Topics.CmdVel, ZeroTwist());
+                    IsPublishing = false;
+                }
+                UpdateControlMode(false, input.DeltaTime, link);
+                return;
+            }
 
             // ── Thumbsticks (dead-zoned) ───────────────────────────────────────
             float lx = ApplyDeadZone(input.LeftStick.x);
@@ -104,6 +135,7 @@ namespace OmniBot.VR.Control.Drive
             // ── Scheme-specific velocity ───────────────────────────────────────
             bool hasInput;
             TwistMsg twist = ComputeVelocity(lx, ly, rx, ry, speedMult, out hasInput);
+            SafetyCaps.LimitTwist(twist, Profile, ref _prevVx, ref _prevVy, ref _prevVz, ref _prevWz, input.DeltaTime);
 
             // ── Control-mode management ────────────────────────────────────────
             UpdateControlMode(hasInput, input.DeltaTime, link);
@@ -114,6 +146,7 @@ namespace OmniBot.VR.Control.Drive
             PublishTimer -= PublishInterval;
 
             bool shouldPublish = hasInput || NoInputTimer < ZeroStopDelay;
+            if (string.IsNullOrEmpty(Profile.Topics.CmdVel)) return;
             if (shouldPublish)
             {
                 link.Publish(Profile.Topics.CmdVel, twist);
@@ -121,21 +154,22 @@ namespace OmniBot.VR.Control.Drive
             }
             else if (IsPublishing)
             {
-                link.Publish(Profile.Topics.CmdVel, ZeroTwist());
+                PublishZero(link);
                 IsPublishing = false;
             }
         }
 
-        public void Stop(IRobotLink link)
+        public virtual void Stop(IRobotLink link)
         {
             if (!IsConfigured || Profile == null) return;
             if (link != null && link.IsConnected)
             {
-                link.Publish(Profile.Topics.CmdVel, ZeroTwist());
+                PublishZero(link);
                 if (InTeleopMode) PublishControlMode(IdleMode, link);
             }
             InTeleopMode = false;
             IsPublishing = false;
+            _prevVx = _prevVy = _prevVz = _prevWz = 0f;
             NoInputTimer = 0f;
             NoInputModeTimer = 0f;
         }
@@ -159,7 +193,10 @@ namespace OmniBot.VR.Control.Drive
             if (input.BothGripsPressed)
             {
                 EmergencyStopActive = true;
-                link.Publish(Profile.Topics.EmergencyStop, new BoolMsg(true));
+                PublishZero(link);
+                if (!string.IsNullOrEmpty(Profile.Topics.EmergencyStop))
+                    link.Publish(Profile.Topics.EmergencyStop, new BoolMsg(true));
+                PublishZero(link);
                 OVRInput.SetControllerVibration(1f, 1f, OVRInput.Controller.LTouch);
                 OVRInput.SetControllerVibration(1f, 1f, OVRInput.Controller.RTouch);
                 Debug.Log($"[{GetType().Name}] Emergency stop ACTIVATED.");
@@ -168,7 +205,8 @@ namespace OmniBot.VR.Control.Drive
                      && OperateSafetyRules.GripReleaseClearsStop(OperateSafetyLatch.UiEStopLatched))
             {
                 EmergencyStopActive = false;
-                link.Publish(Profile.Topics.EmergencyStop, new BoolMsg(false));
+                if (!string.IsNullOrEmpty(Profile.Topics.EmergencyStop))
+                    link.Publish(Profile.Topics.EmergencyStop, new BoolMsg(false));
                 OVRInput.SetControllerVibration(0f, 0f, OVRInput.Controller.LTouch);
                 OVRInput.SetControllerVibration(0f, 0f, OVRInput.Controller.RTouch);
                 Debug.Log($"[{GetType().Name}] Emergency stop RELEASED.");
@@ -201,7 +239,18 @@ namespace OmniBot.VR.Control.Drive
         }
 
         protected void PublishControlMode(string mode, IRobotLink link)
-            => link.Publish(Profile.Topics.ControlMode, new StringMsg(mode));
+        {
+            if (link == null || string.IsNullOrEmpty(Profile?.Topics?.ControlMode) || string.IsNullOrEmpty(mode))
+                return;
+            link.Publish(Profile.Topics.ControlMode, new StringMsg(mode));
+        }
+
+        private void PublishZero(IRobotLink link)
+        {
+            if (link == null || string.IsNullOrEmpty(Profile?.Topics?.CmdVel)) return;
+            link.Publish(Profile.Topics.CmdVel, ZeroTwist());
+            _prevVx = _prevVy = _prevVz = _prevWz = 0f;
+        }
 
         private bool HoldUiEStop(IRobotLink link)
         {
@@ -213,6 +262,11 @@ namespace OmniBot.VR.Control.Drive
                     link.Publish(Profile.Topics.EmergencyStop, new BoolMsg(true));
                 if (Profile.Topics != null && !string.IsNullOrEmpty(Profile.Topics.CmdVel))
                     link.Publish(Profile.Topics.CmdVel, ZeroTwist());
+            }
+            if (IsPublishing && Profile.Topics != null && !string.IsNullOrEmpty(Profile.Topics.CmdVel))
+            {
+                link.Publish(Profile.Topics.CmdVel, ZeroTwist());
+                IsPublishing = false;
             }
             return true;
         }

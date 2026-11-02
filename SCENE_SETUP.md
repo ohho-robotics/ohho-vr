@@ -8,12 +8,12 @@
 > controller, and saves the scene.
 
 The app runs **one unified world-space screen** ("OhhO Screen", 1600×1000 at
-0.001 scale ≈ 1.6 m wide) floating 1.6 m in front of the user over
-passthrough. Menus use a `WorldSpaceUiPlacer` (1.6 m, billboard on). The
-operate view locks that follow so the dashboard does not drift while driving;
-**Recentre** on the mode bar snaps it back in front. The header bar
-(OhhO logo + ohho-robotics.com + Open Website button) stays on the menu
-screen, and the pages route inside the rig:
+0.001 scale ≈ 1.6 m wide) floating in front of the user over
+passthrough. Menus use a `WorldSpaceUiPlacer` (billboard on; comfort settings
+can change distance and size). The operate view locks that follow so the
+dashboard does not drift while driving; **Recentre** on the mode bar snaps it
+back to 1.6 m. The header bar (OhhO logo + ohho-robotics.com + Open Website
+button) stays on the menu screen, and the pages route inside the rig:
 
 ```
 ┌──────────────── OhhO Screen (one canvas, faces the user) ───────────────┐
@@ -22,6 +22,7 @@ screen, and the pages route inside the rig:
 │ Login page      → email OTP sign-in (Supabase, same account as the site) │
 │ Console page    → VR products from the manifest (today: OhhO Pilot)      │
 │ Garage page     → the user's robots (Supabase user_robots, shared w/web) │
+│ Session page    → Simulate (local / cloud / in-headset) or Drive real     │
 │ Operate page    → mode/safety bar, telemetry, sim screen, arm, legend   │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
@@ -114,12 +115,12 @@ off; the feed and the legend are on this screen. Placement locks
 | Region | Contents |
 |---|---|
 | Top | SIM/REAL, mode, e-stop, deadman, link. Actions: Teleop, Nav2, Policy (confirm), Record, E-Stop (latched), Reset, Recentre |
-| Left | Telemetry (pose, velocity, mode), link connect, drive/arm hints |
-| Centre | Sim screen slot + `CameraFeedController` (OHH-209's curved presenter mounts here when that branch lands) |
-| Right | Arm joint readouts, dataset recording, export |
+| Left | Robot name, connection (IP/port/Connect/Disconnect/status dot), telemetry (pose, velocity, arm, mode), heartbeat safety strip (state, Reset e-stop, Confirm reset), expanded telemetry, drive/arm hints |
+| Centre | Curved sim screen (`CameraFeedController` + `SimScreenPresenter`: chase / front / wrist / BEV, wrist PiP, WebRTC with MJPEG fallback). A real session keeps the flat camera on this slot |
+| Right | Arm joint readouts, dataset recording (Start / Stop & Save / Discard), **Export to Robot** (POSTs JSONL to the VR bridge at `:8765`) |
 | Bottom | Controls legend, **< Garage** |
 
-Body text is at least 0.9° at 1.6 m (canvas scale 0.001) and uses near-white on a near-opaque dark panel so it stays readable in bright passthrough.
+Body text is at least 0.9° at 1.6 m (canvas scale 0.001) and uses near-white on a near-opaque dark panel so it stays readable in bright passthrough. Grip e-stop, the operate-bar latch, the heartbeat watchdog, and the deadman re-press all stay in force.
 
 ---
 
@@ -131,12 +132,19 @@ Body text is at least 0.9° at 1.6 m (canvas scale 0.001) and uses near-white on
    VR products (today **OhhO Pilot**).
 4. Open Pilot → the **garage** lists the robots from your OhhO account (pulled from
    Supabase `user_robots`). Empty? Add one on the website/app — it appears here.
-5. **Select a robot** → `OhhoVrApp` builds its `RobotProfile` from the catalog and
-   hands it to `TeleopController`. The teleop page opens.
+5. **Select a robot** → the session page asks **Simulate** or **Drive real**.
+   Simulate → Local desktop, Cloud, or In-headset. Drive real shows the safety
+   notice (and the deadman tutorial the first time) before an announced robot
+   or a manual IP. `OhhoVrApp` then builds the `RobotProfile` and hands it to
+   `TeleopController`. The teleop page opens with a blue **SIM** or orange **REAL** banner.
    - **Base:** left stick strafe (vx/vy), right stick X yaw, right grip turbo,
      both grips e-stop.
-   - **Arm:** right-hand pose → IK → `/arm/joint_commands` @ 20 Hz; pinch →
-     gripper; left-hand thumbs-up (hold 0.5 s) toggles arm enable.
+   - **Arm:** Left X requests enable (a real robot needs a second Left X
+     before `/arm/enable`). A left-hand thumbs-up (hold 0.5 s) requests enable
+     or turns the arm off and never confirms a real robot. Hold the right index
+     trigger to move — the first command is the pose already held, then the
+     right-hand pose drives IK to `/arm/joint_commands/teleop` @ 20 Hz. Pinch
+     closes the gripper. Poor hand tracking jogs one joint with right stick Y.
    - All topics, joint names and limits come from the profile (OmniBot = SO-101
      6-DOF + mecanum, identical to the old hardcoded constants).
 
