@@ -116,8 +116,8 @@ off; the feed and the legend are on this screen. Placement locks
 |---|---|
 | Top | SIM/REAL, mode, e-stop, deadman, link. Actions: Teleop, Nav2, Policy (confirm), Record, E-Stop (latched), Reset, Recentre |
 | Left | Robot name, connection (IP/port/Connect/Disconnect/status dot), telemetry (pose, velocity, arm, mode), heartbeat safety strip (state, Reset e-stop, Confirm reset), expanded telemetry, drive/arm hints |
-| Centre | Curved sim screen (`CameraFeedController` + `SimScreenPresenter`: chase / front / wrist / BEV, wrist PiP, WebRTC with MJPEG fallback). A real session keeps the flat camera on this slot |
-| Right | Arm joint readouts, dataset recording (Start / Stop & Save / Discard), **Export to Robot** (POSTs JSONL to the VR bridge at `:8765`) |
+| Centre | Curved sim screen (`CameraFeedController` + `SimScreenPresenter`: chase / front / wrist / BEV, wrist PiP, WebRTC with MJPEG fallback), camera name and transport, **Next Camera**. A real session keeps the flat camera on this slot. BEV is one of those cameras. The same topic is also a world-space floor quad (`BevFloorPanel`) under `OmniBotTwin` / `TwinView` when that twin is in the scene. The quad is created at teleop start, not saved in `scene1`. |
+| Right | Arm joint readouts, dataset recording (Start / Stop & Save / Discard, live status), **Export to Robot** (POSTs JSONL to the VR bridge at `:8765`) |
 | Bottom | Controls legend, **< Garage** |
 
 Body text is at least 0.9° at 1.6 m (canvas scale 0.001) and uses near-white on a near-opaque dark panel so it stays readable in bright passthrough. Grip e-stop, the operate-bar latch, the heartbeat watchdog, and the deadman re-press all stay in force.

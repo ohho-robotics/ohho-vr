@@ -5,6 +5,7 @@ using UnityEngine.UI;
 using TMPro;
 using OmniBot.VR.Control;
 using OmniBot.VR.Control.Session;
+using OmniBot.VR.Core;
 
 namespace OmniBot.VR.Video
 {
@@ -14,7 +15,8 @@ namespace OmniBot.VR.Video
     /// picture-in-picture. A real session keeps the profile camera order on the
     /// flat panel. WebRTC is preferred when the topic maps to an ohho_webrtc
     /// track; otherwise MJPEG runs with off-thread decode. Right thumbstick
-    /// press cycles cameras.
+    /// press cycles cameras. The BEV topic is also drawn on a floor quad under
+    /// the tabletop twin.
     /// </summary>
     public class CameraFeedController : MonoBehaviour
     {
@@ -46,6 +48,11 @@ namespace OmniBot.VR.Video
         private float _statsTimer;
         private int _generation;
         private readonly StreamFpsCounter _fps = new StreamFpsCounter();
+        private readonly List<DetectionBox> _boxes = new List<DetectionBox>();
+        private readonly FrontDetectionCompositor _compositor = new FrontDetectionCompositor();
+        private BevFloorPanel _floor;
+        private string _detectionTopic;
+        private bool _detectionLogged;
         private Texture2D _grey;
 
         /// <summary>Active transport, "WebRTC" or "MJPEG", or null when there is no camera.</summary>
@@ -99,6 +106,13 @@ namespace OmniBot.VR.Video
             if (conn != null && _ipHooked) conn.OnRobotIpChanged -= OnRobotIpChanged;
             _ipHooked = false;
             if (_grey != null) Destroy(_grey);
+            _compositor.Release();
+            if (!string.IsNullOrEmpty(_detectionTopic))
+            {
+                var ros = ROSBridgeClient.Instance;
+                if (ros != null) ros.Unsubscribe(_detectionTopic);
+                _detectionTopic = null;
+            }
         }
 
         private void Update()
@@ -149,11 +163,15 @@ namespace OmniBot.VR.Video
             _configured = true;
             _hasFrame = false;
             _fps.Clear();
+            _boxes.Clear();
             EnsurePresenter();
             _presenter.Apply(_plan);
             _presenter.SetSelection(_mainIndex);
+            EnsureFloor();
             ApplyLabel();
+            LogDetectionsOnce();
             if (isActiveAndEnabled) RestartAll();
+            else _floor.Apply(_plan, false);
         }
 
         public void CycleCamera()
@@ -224,6 +242,45 @@ namespace OmniBot.VR.Video
             _presenter.Bind(this);
         }
 
+        private void EnsureFloor()
+        {
+            if (_floor != null) return;
+            var go = new GameObject("BevFloorDriver");
+            go.transform.SetParent(transform, false);
+            _floor = go.AddComponent<BevFloorPanel>();
+        }
+
+        private void LogDetectionsOnce()
+        {
+            if (_detectionLogged || DetectionTopics.IsAvailable) return;
+            _detectionLogged = true;
+            Debug.Log("[Perception] " + DetectionTopics.UnavailableReason);
+        }
+
+        private void StartDetections()
+        {
+            StopDetections();
+            if (_offline || !DetectionTopics.TryResolve(out string topic)) return;
+            var ros = ROSBridgeClient.Instance;
+            if (ros == null) return;
+            _detectionTopic = topic;
+            ros.Subscribe(topic, DetectionTopics.MessageType, OnDetections);
+        }
+
+        private void StopDetections()
+        {
+            if (string.IsNullOrEmpty(_detectionTopic)) return;
+            var ros = ROSBridgeClient.Instance;
+            if (ros != null) ros.Unsubscribe(_detectionTopic);
+            _detectionTopic = null;
+        }
+
+        private void OnDetections(string json)
+        {
+            if (!Detection2DParser.TryParse(json, _boxes, out string error))
+                Debug.LogWarning("[Perception] Detection2DArray " + error);
+        }
+
         private void HookIp()
         {
             if (_ipHooked) return;
@@ -245,6 +302,7 @@ namespace OmniBot.VR.Video
             StopAll();
             if (!_configured || _plan == null) return;
             ApplyLabel();
+            if (_floor != null) _floor.Apply(_plan, !_offline);
             if (_offline || _plan.Views.Count == 0)
             {
                 ShowNoSignal();
@@ -253,6 +311,7 @@ namespace OmniBot.VR.Video
             }
             _hasFrame = false;
             _fps.Clear();
+            StartDetections();
             StartMain();
             StartPip();
             if (_presenter != null) _presenter.SetSelection(_mainIndex);
@@ -364,6 +423,7 @@ namespace OmniBot.VR.Video
         {
             StopMain();
             StopPip();
+            StopDetections();
         }
 
         private void StopMain()
@@ -390,6 +450,11 @@ namespace OmniBot.VR.Video
 
         private void OnMainFrame(Texture2D frame)
         {
+            if (_compositor != null && _plan != null && _mainIndex >= 0 && _mainIndex < _plan.Views.Count)
+            {
+                Texture2D shown = _compositor.Present(frame, _plan.Views[_mainIndex].Topic, _boxes);
+                if (shown != null) frame = shown;
+            }
             _hasFrame = true;
             double now = Time.realtimeSinceStartupAsDouble;
             _fps.Mark(now);
