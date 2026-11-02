@@ -593,6 +593,8 @@ namespace OmniBot.VR.Tests
 
             public void Unsubscribe(string topic) { }
 
+            public void CallService(string service, string type, Action<bool, string> onResponse) { }
+
             public List<Pub> Since(int mark)
             {
                 var batch = new List<Pub>();
