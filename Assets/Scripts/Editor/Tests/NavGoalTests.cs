@@ -489,6 +489,7 @@ waypoints:
                 Published.Add((topic, Newtonsoft.Json.JsonConvert.SerializeObject(msg)));
             public void Subscribe(string topic, string type, System.Action<string> callback) { }
             public void Unsubscribe(string topic) { }
+            public void CallService(string service, string type, System.Action<bool, string> onResponse) { }
         }
 
         private sealed class FakeTransport : INavTransport
