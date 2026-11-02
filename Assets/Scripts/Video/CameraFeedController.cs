@@ -6,6 +6,7 @@ using TMPro;
 using OmniBot.VR.Control;
 using OmniBot.VR.Control.Session;
 using OmniBot.VR.Core;
+using OmniBot.VR.Latency;
 
 namespace OmniBot.VR.Video
 {
@@ -450,6 +451,15 @@ namespace OmniBot.VR.Video
 
         private void OnMainFrame(Texture2D frame)
         {
+            if (LatencyCapture.IsEnabled)
+            {
+                long? capture = _mainMjpeg != null ? _mainMjpeg.LastCaptureUnixMs : null;
+                string transport = _mainSource != null ? _mainSource.TransportName : "";
+                LatencyCapture.NoteVideoFrame(
+                    capture,
+                    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    transport);
+            }
             if (_compositor != null && _plan != null && _mainIndex >= 0 && _mainIndex < _plan.Views.Count)
             {
                 Texture2D shown = _compositor.Present(frame, _plan.Views[_mainIndex].Topic, _boxes);
