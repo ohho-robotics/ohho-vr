@@ -3,6 +3,7 @@ using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 using OmniBot.VR.Core;
+using OmniBot.VR.Control;
 using OmniBot.VR.Video;
 
 namespace OmniBot.VR.UI
@@ -13,15 +14,12 @@ namespace OmniBot.VR.UI
     /// screen, instead of parsing headers into strings and calling
     /// <c>ImageConversion.LoadImage</c> on a fresh byte array every frame.
     /// The camera name is written when the stream starts, not every frame.
+    /// Topics come from the robot profile via <see cref="Configure"/>.
     /// </summary>
     public class CameraFeedViewer : MonoBehaviour
     {
-        [Header("Camera URLs (topic path only, e.g. /camera/front/image_raw)")]
-        [SerializeField] private string[] cameraTopics = {
-            "/camera/front/image_raw",
-            "/camera/wrist/image_raw",
-            "/camera/base/bev/image_raw",
-        };
+        [Header("Camera topics — filled from the robot profile, not hard-coded")]
+        [SerializeField] private string[] cameraTopics = Array.Empty<string>();
 
         [Header("Display")]
         [SerializeField] private RawImage displayImage;
@@ -33,6 +31,7 @@ namespace OmniBot.VR.UI
 
         private string[] _fullUrls;
         private int _currentCameraIndex;
+        private bool _configured;
         private string _robotIp = "192.168.1.101";
         private MjpegVideoSource _mjpeg;
         private Texture2D _grey;
@@ -40,11 +39,20 @@ namespace OmniBot.VR.UI
         private void Start()
         {
             _robotIp = PlayerPrefs.GetString("robot_ip", "192.168.1.101");
-            RebuildUrls(_robotIp);
-
             ConnectionManager.Instance.OnRobotIpChanged += OnRobotIpChanged;
             ConnectionManager.Instance.OnConnectionStateChanged += OnConnectionStateChanged;
+        }
 
+        /// <summary>Replace the camera list with the profile's image topics and open that stream.</summary>
+        public void Configure(RobotProfile profile)
+        {
+            var images = profile?.Topics?.Images;
+            cameraTopics = images == null || images.Count == 0
+                ? Array.Empty<string>()
+                : images.ToArray();
+            _configured = true;
+            _currentCameraIndex = 0;
+            RebuildUrls(_robotIp);
             StartStreaming();
         }
 
@@ -82,6 +90,7 @@ namespace OmniBot.VR.UI
         private void OnRobotIpChanged(string newIp)
         {
             _robotIp = newIp;
+            if (!_configured) return;
             RebuildUrls(newIp);
             StartStreaming();
         }
@@ -93,7 +102,7 @@ namespace OmniBot.VR.UI
                 StopStreaming();
                 ShowNoSignal();
             }
-            else
+            else if (_configured)
             {
                 StartStreaming();
             }
@@ -101,11 +110,7 @@ namespace OmniBot.VR.UI
 
         private void RebuildUrls(string ip)
         {
-            if (cameraTopics == null)
-            {
-                _fullUrls = new string[0];
-                return;
-            }
+            if (cameraTopics == null) cameraTopics = Array.Empty<string>();
             _fullUrls = new string[cameraTopics.Length];
             for (int i = 0; i < cameraTopics.Length; i++)
             {

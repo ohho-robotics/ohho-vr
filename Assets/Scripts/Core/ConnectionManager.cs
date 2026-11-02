@@ -1,6 +1,7 @@
 using System;
-using System.Collections.Generic;
+using System.Threading.Tasks;
 using UnityEngine;
+using LatchedRobotDescriptor = OmniBot.VR.Descriptor.RobotDescriptor;
 
 namespace OmniBot.VR.Core
 {
@@ -13,6 +14,8 @@ namespace OmniBot.VR.Core
     {
         // ── Singleton ────────────────────────────────────────────────────────
         private static ConnectionManager _instance;
+        public static bool HasInstance => _instance != null;
+
         public static ConnectionManager Instance
         {
             get
@@ -43,33 +46,13 @@ namespace OmniBot.VR.Core
         /// <summary>Fires when the robot IP changes (e.g. after a successful connect).</summary>
         public event Action<string> OnRobotIpChanged;
 
-        // ── Topic → ROS type registry ────────────────────────────────────────
-        // Publisher topic → ROS type string
-        private static readonly Dictionary<string, string> PublishTopics = new Dictionary<string, string>
-        {
-            { RobotConfig.TOPIC_CMD_VEL,         "geometry_msgs/Twist"       },
-            { RobotConfig.TOPIC_CONTROL_MODE,    "std_msgs/String"            },
-            { RobotConfig.TOPIC_ARM_COMMANDS,    "sensor_msgs/JointState"     },
-            { RobotConfig.TOPIC_ARM_ENABLE,      "std_msgs/Bool"              },
-            { RobotConfig.TOPIC_EMERGENCY_STOP,  "std_msgs/Bool"              },
-            { RobotConfig.TOPIC_MISSION_COMMAND, "std_msgs/String"            },
-            { RobotConfig.TOPIC_AI_COMMAND,      "std_msgs/String"            },
-            { RobotConfig.TOPIC_VR_RECORD_START, "std_msgs/String"            },
-            { RobotConfig.TOPIC_VR_RECORD_STOP,  "std_msgs/Bool"              },
-        };
+        /// <summary>Last descriptor that parsed. Null when disconnected or the document was rejected.</summary>
+        public LatchedRobotDescriptor LatestDescriptor { get; private set; }
 
-        // Subscriber topic → ROS type string
-        private static readonly Dictionary<string, string> SubscribeTopics = new Dictionary<string, string>
-        {
-            { RobotConfig.TOPIC_ODOM,                "nav_msgs/Odometry"      },
-            { RobotConfig.TOPIC_IMU,                 "sensor_msgs/Imu"        },
-            { RobotConfig.TOPIC_ARM_STATES,          "sensor_msgs/JointState" },
-            { RobotConfig.TOPIC_MISSION_STATUS,      "std_msgs/String"        },
-            { RobotConfig.TOPIC_AI_STATUS,           "std_msgs/String"        },
-            { RobotConfig.TOPIC_AI_RESPONSE_NEEDED,  "std_msgs/String"        },
-            { RobotConfig.TOPIC_CONTROL_MODE_ACTIVE, "std_msgs/String"        },
-            { RobotConfig.TOPIC_ARM_MODE_ACTIVE,     "std_msgs/String"        },
-        };
+        /// <summary>Fires when a latched /ohho/descriptor message parses. Invalid documents are ignored.</summary>
+        public event Action<LatchedRobotDescriptor> OnRobotDescriptor;
+
+        private Action<string> _onDescriptorMessage;
 
         // ── Unity lifecycle ──────────────────────────────────────────────────
         private void Awake()
@@ -140,11 +123,22 @@ namespace OmniBot.VR.Core
         /// <summary>Unsubscribes from all topics, then disconnects cleanly.</summary>
         public void Disconnect()
         {
-            foreach (var topic in SubscribeTopics.Keys)
+            _ = DisconnectAsync();
+        }
+
+        /// <summary>
+        /// Unsubscribes, then closes the socket. Callers that are about to open
+        /// another session must await this so the previous socket is gone first.
+        /// </summary>
+        public async Task DisconnectAsync()
+        {
+            var client = ROSBridgeClient.Instance;
+            if (client != null)
             {
-                ROSBridgeClient.Instance.Unsubscribe(topic);
+                client.UnsubscribeAll();
+                await client.DisconnectAsync();
             }
-            ROSBridgeClient.Instance.Disconnect();
+            LatestDescriptor = null;
         }
 
         /// <summary>Saves auto-connect preference to PlayerPrefs.</summary>
@@ -161,34 +155,40 @@ namespace OmniBot.VR.Core
 
         private void HandleConnected()
         {
-            Debug.Log("[ConnectionManager] Connected — advertising and subscribing.");
+            Debug.Log("[ConnectionManager] Connected — waiting for /ohho/descriptor.");
 
             // Save last-known connection details
             PlayerPrefs.SetString(PrefKeyIp, CurrentIp);
             PlayerPrefs.SetInt(PrefKeyPort, CurrentPort);
             PlayerPrefs.Save();
 
-            // Advertise all publish topics
-            foreach (var kvp in PublishTopics)
-            {
-                ROSBridgeClient.Instance.Advertise(kvp.Key, kvp.Value);
-            }
-
-            // Subscribe to all receive topics (callbacks registered elsewhere)
-            foreach (var kvp in SubscribeTopics)
-            {
-                // Only send the subscribe op if not already registered
-                // (ROSBridgeClient.Subscribe handles deduplication)
-                ROSBridgeClient.Instance.Subscribe(kvp.Key, kvp.Value, _ => { /* placeholder; actual handlers added by feature scripts */ });
-            }
+            // Command topics are advertised by TeleopController from the profile.
+            // The only connection-time subscription is the latched descriptor.
+            if (_onDescriptorMessage == null)
+                _onDescriptorMessage = OnDescriptorMessage;
+            ROSBridgeClient.Instance.Subscribe(
+                LatchedRobotDescriptor.Topic, LatchedRobotDescriptor.MessageType, _onDescriptorMessage);
 
             OnConnectionStateChanged?.Invoke(true);
             OnRobotIpChanged?.Invoke(CurrentIp);
         }
 
+        private void OnDescriptorMessage(string json)
+        {
+            if (!LatchedRobotDescriptor.TryParse(json, out var descriptor, out var error))
+            {
+                Debug.LogWarning("[ConnectionManager] Rejected /ohho/descriptor: " + error);
+                return;
+            }
+
+            LatestDescriptor = descriptor;
+            OnRobotDescriptor?.Invoke(descriptor);
+        }
+
         private void HandleDisconnected()
         {
             Debug.Log("[ConnectionManager] Disconnected.");
+            LatestDescriptor = null;
             OnConnectionStateChanged?.Invoke(false);
         }
 
