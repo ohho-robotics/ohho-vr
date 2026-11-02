@@ -194,6 +194,19 @@ namespace OmniBot.VR.Control
         /// </summary>
         public IkLocation IkLocation;
 
+        /// <summary>
+        /// Comma-separated policy ids, or a JSON model list, used when serve
+        /// <c>GET /models</c> is unavailable. OmniBot's list is the ACT VR
+        /// sim-pick checkpoint.
+        /// </summary>
+        public string PolicyModelsFallback;
+
+        /// <summary>
+        /// OhhO Serve origin, for example <c>http://192.168.1.101:8000</c>.
+        /// Empty means the policy panel uses the connected robot IP on port 8000.
+        /// </summary>
+        public string ServeBaseUrl;
+
         /// <summary>package:// or http URL from the descriptor. Empty on the catalog path.</summary>
         public string UrdfUrl;
 
@@ -227,6 +240,15 @@ namespace OmniBot.VR.Control
         public string Heartbeat;        // descriptor topics.heartbeat
         public string Telemetry;        // descriptor topics.telemetry
         public List<string> Images = new List<string>();
+
+        // Policy panel. Empty skips that publish or subscribe.
+        public string ArmCmdMode;
+        public string PolicyEnable;
+        public string PolicyTask;
+        public string PolicyLoad;
+        public string PolicyModels;
+        public string PolicyCmdVel;
+        public string AiStatus;
 
         // Optional perception topics for the SLAM map panel. Blank fields fall
         // back to the OmniBot names (/map, /scan, Nav2 costmaps). OHH-228.
