@@ -27,7 +27,7 @@ The shipping route in `OhhoVrApp` is:
 3. **Garage.** `GaragePanelController.OnRobotSelected` raises `RobotPicked`. The app builds a `RobotProfile`, applies saved calibration, remembers the robot, and calls `TeleopController.StartTeleop`.
 4. **Picker.** `RobotSelectionController` walks category → type → model → name → confirm. Confirm writes to Supabase. The automated test walks through the name step and then cancels. It does not confirm.
 5. **Teleop.** `StartTeleop` builds the drive and manipulation schemes, and advertises topics when the link reports connected.
-6. **E-stop.** `DriveSchemeBase` treats both grips as a deadman. Press publishes `/emergency_stop` true and then returns before any velocity publish. Release publishes `/emergency_stop` false. Motion commands are allowed again after release.
+6. **E-stop.** Both grips latch `/emergency_stop`. Press publishes true once and then returns before any velocity publish. Grip release, Reset alone, and releasing the deadman do not publish false. The clear is Reset, then a left-grip release, then a re-press, which publishes false once. Motion is allowed on that re-press.
 
 The Google button on `LoginPanelController` calls `ShowGarage` immediately. That shortcut is not the RC1 sign-in path and the automated test does not use it.
 
@@ -54,7 +54,7 @@ The Google button on `LoginPanelController` calls `ShowGarage` immediately. That
 | Profile for OmniBot Pro | Automated. Mecanum, 0.2 m/s, 1.0 rad/s | — | Same profile once the link exists | RC checklist |
 | Topic advertise | Recorded, not sent | Python smoke on `/ohho/ci_smoke` | Future | RC, with `ros2 topic echo` if a shell is available |
 | `/cmd_vel/teleop` | Recorded and checked against the cap | Not published by the smoke or the Unity broker test | Future | RC, low-speed only, after the abort rules |
-| `/emergency_stop` | Recorded true on press, false on release, no non-zero twist while held | Not published | Future | RC both-grips, then the on-screen button if it is visible |
+| `/emergency_stop` | Recorded true once on both grips. No false before the deadman re-press, one false on that re-press, no non-zero twist while latched | Not published | Future | RC both-grips, then the on-screen button if it is visible |
 | Camera, recording, passthrough, hands | Not automated | — | — | RC checklist |
 | Link down | Automated: zero advertises and zero publishes | Broker can be stopped | Future | RC: red status, then physical e-stop |
 
@@ -64,7 +64,7 @@ Default robot endpoint in the client is `192.168.1.101:9090` (ROSBridge). Record
 
 These are the contracts the automated tests lock in, and the contracts that still belong to the robot.
 
-**S1. Both grips are a deadman.** Rising edge publishes `std_msgs/Bool` true on `/emergency_stop` once. While `EmergencyStopActive` is set, `DriveSchemeBase.Tick` returns before `cmd_vel`. Falling edge publishes false. The onboarding string is "Both grips: emergency stop · Release to clear". Release allows motion again. Do not turn this into a latch without a product decision and a checklist change.
+**S1. Both grips latch e-stop.** Rising edge publishes `std_msgs/Bool` true on `/emergency_stop` once. While `EmergencyStopActive` is set, `DriveSchemeBase.Tick` returns before `cmd_vel`. Grip release does not publish false. Clear takes Reset, then a left-grip release, then a re-press, which publishes false once. The onboarding line is "Reset, release the deadman, then press it again." Motion is allowed on that re-press.
 
 **S2. No non-zero velocity while the deadman is held.** Sticks may be fully deflected. The test counts non-zero twists and requires zero. A later change that also publishes an explicit zero twist on the rising edge still passes. The current code does not publish that zero twist.
 
@@ -80,7 +80,7 @@ These are the contracts the automated tests lock in, and the contracts that stil
 
 **S8. Broker tests must not move a robot.** The Docker compose file and the Unity broker test use `/ohho/ci_smoke` only. `OHHO_ROSBRIDGE_URL` points at that broker. It does not point at a live robot.
 
-**S9. Physical e-stop.** Before any RC teleop, the tester can reach the robot's hardware stop. If the base is still moving while both grips are held, keep the grips held and use that hardware stop. Releasing the grips clears the software deadman.
+**S9. Physical e-stop.** Before any RC teleop, the tester can reach the robot's hardware stop. If the base is still moving while both grips are held, keep the grips held and use that hardware stop. Releasing the grips does not clear the latched software stop.
 
 ## 6. Regression list
 
@@ -93,8 +93,8 @@ These are the contracts the automated tests lock in, and the contracts that stil
 | R5 | Advertises `/cmd_vel/teleop` as `geometry_msgs/Twist` and `/emergency_stop` as `std_msgs/Bool` | same |
 | R6 | Stick inside the 0.1 dead zone adds no non-zero twist | same |
 | R7 | Both-grips press publishes e-stop true once and adds no non-zero twist while held | same |
-| R8 | Release publishes e-stop false once | same |
-| R9 | Full stick after release is vx=0.2, vy=0.2, yaw=−1.0. Turbo forward stays at 0.2 | same |
+| R8 | Reset, then deadman release, then re-press publishes e-stop false once. Release and Reset alone publish none | same |
+| R9 | Full stick on the re-press is vx=vy=0.2/√2, yaw=−1.0. Right-trigger turbo forward stays at 0.2 | same |
 | R10 | `StopTeleop` publishes a zero twist and `control_mode` `nav2`, and clears the active flag | same |
 | R11 | A disconnected fake link advertises nothing and publishes nothing, including e-stop | `DisconnectedFakeLink_PublishesNothing` |
 | R12 | Disposable rosbridge echoes `/ohho/ci_smoke` | `smoke_rosbridge.py` in CI |

@@ -19,10 +19,10 @@ namespace OmniBot.VR.PlayMode
     /// <summary>
     /// Drives the real headset flow against <see cref="FakeRobotLink"/>:
     /// login stub, console, garage, add-robot picker, simulate on that link,
-    /// teleop, both-grips e-stop. The stop stays latched until an explicit left-X
-    /// re-arm. A grip release does not clear it, and the base stays still until
-    /// one grip (the deadman) is held again. Supabase, rosbridge, and the Quest
-    /// runtime are not contacted.
+    /// teleop, both-grips e-stop. The stop stays latched until Reset, a left-grip
+    /// release, and a re-press. That re-press publishes emergency_stop false once.
+    /// Grip release and Reset alone do not clear it. Supabase, rosbridge, and the
+    /// Quest runtime are not contacted.
     /// </summary>
     public static class OperatorFlowHarness
     {
@@ -124,21 +124,23 @@ namespace OmniBot.VR.PlayMode
 
                 // Grip release must not publish emergency_stop false.
                 Tick(drive, link, Stick(0f, 0f), grips: false, press: false, release: true);
-                result.EStopFalseBeforeReset = link.CountBool(EmergencyStop, false);
 
-                // Deadman held and sticks deflected, still before the reset.
+                // Deadman held and sticks deflected, still before Reset.
                 // A false published on release would let this tick drive.
                 Tick(drive, link, Stick(1f, 1f, 1f), leftGrip: true, rightGrip: false, press: false, release: false);
+
+                // Reset while the deadman is held does not clear the latch.
+                Tick(drive, link, Stick(0f, 0f), leftGrip: true, rightGrip: false, press: false, release: false, reset: true);
+
+                // Releasing the deadman after Reset does not publish false.
+                Tick(drive, link, Stick(1f, 1f, 1f), leftGrip: false, rightGrip: false, press: false, release: false);
+                result.EStopFalseBeforeReset = link.CountBool(EmergencyStop, false);
                 result.NonZeroBeforeReset = link.CountNonZeroTwist(CmdVel);
 
-                // Left X is the re-arm. Sticks stay centered so the clear itself
-                // does not command motion.
-                Tick(drive, link, Stick(0f, 0f), leftGrip: false, rightGrip: false, press: false, release: false, reset: true);
-                result.EStopFalseCount = link.CountBool(EmergencyStop, false);
-
-                // Deadman (left grip, not turbo) plus full sticks. Motion is
-                // allowed only after the explicit reset.
+                // Re-press publishes emergency_stop false once. Full sticks on
+                // this tick are the first motion the latch allows.
                 Tick(drive, link, Stick(1f, 1f, 1f), leftGrip: true, rightGrip: false, press: false, release: false);
+                result.EStopFalseCount = link.CountBool(EmergencyStop, false);
                 var resume = link.LastTwist(CmdVel);
                 if (resume != null)
                 {
@@ -148,7 +150,9 @@ namespace OmniBot.VR.PlayMode
                 }
                 result.TeleopModePublished = link.HasString(ControlMode, "teleop");
 
-                Tick(drive, link, Stick(0f, 1f, 0f), leftGrip: false, rightGrip: true, press: false, release: false);
+                // Deadman stays held. Right trigger is sim turbo and is still
+                // clamped to the 0.2 m/s class cap. Right grip is neither.
+                Tick(drive, link, Stick(0f, 1f, 0f), leftGrip: true, rightGrip: false, press: false, release: false, rightTrigger: true);
                 var turbo = link.LastTwist(CmdVel);
                 if (turbo != null) result.TurboLinearX = turbo.linear.x;
 
@@ -366,7 +370,7 @@ namespace OmniBot.VR.PlayMode
             Tick(drive, link, left, grips, grips, press, release);
         }
 
-        static void Tick(IDriveScheme drive, FakeRobotLink link, Vector2 left, bool leftGrip, bool rightGrip, bool press, bool release, bool reset = false)
+        static void Tick(IDriveScheme drive, FakeRobotLink link, Vector2 left, bool leftGrip, bool rightGrip, bool press, bool release, bool reset = false, bool rightTrigger = false)
         {
             var input = new TeleopInput
             {
@@ -374,6 +378,7 @@ namespace OmniBot.VR.PlayMode
                 RightStick = new Vector2(Yaw, 0f),
                 LeftGrip = leftGrip,
                 RightGrip = rightGrip,
+                RightTrigger = rightTrigger,
                 BothGrips = leftGrip && rightGrip,
                 BothGripsPressed = press,
                 BothGripsReleased = release,
