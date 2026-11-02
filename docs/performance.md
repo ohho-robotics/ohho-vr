@@ -57,7 +57,7 @@ Run each scenario long enough to get a steady minute after the first frames, on 
 
 1. **Sim MJPEG.** Simulate session, chase camera on the curved screen, wrist picture-in-picture if the profile has a wrist camera. This is the path in `MjpegVideoSource` (off-thread baseline JPEG, main thread uploads RGB24).
 2. **WebRTC.** Not measurable in this tree. `WebRtcVideoSource` does not finish signaling, and `com.unity.webrtc` is not in `Packages/manifest.json`. Leave the WebRTC row as TODO until that path actually connects. Do not record an MJPEG session and label it WebRTC.
-3. **AR / AprilTag detection on.** The perception panels for that mode are OHH-238 (`DetectionOverlay`, `BevFloorPanel`) and are not in this branch. When they land, repeat the sim-MJPEG capture with detection enabled and read the busiest `cpu_utilization_percentage_coreN` column against the 20% budget.
+3. **AR / AprilTag detection on.** The perception panels for that mode are planned under OHH-238 (`DetectionOverlay`, `BevFloorPanel`). When those panels are in the build under test, repeat the sim-MJPEG capture with detection enabled and read the busiest `cpu_utilization_percentage_coreN` column against the 20% budget.
 
 ### OVR Metrics Tool
 
@@ -167,8 +167,8 @@ Other jobs own these. The offenders are listed so the soak does not ignore them.
 - `Assets/Scripts/UI/TelemetryPanel.cs` (HUD). `RefreshAllUI` at 10 Hz assigns every odometry, IMU, joint, and status label with a new string and no equality check.
 - `Assets/Scripts/UI/RecordingPanel.cs` (HUD). `Update` calls `UpdateLiveStats` every frame. While a recorder exists, `elapsedTimeLabel` and `frameCountLabel` are assigned every frame. During a recording the tenth-of-a-second clock changes every frame, so TMP rebuilds at frame rate.
 - `Assets/Scripts/Video/CameraFeedController.cs` (OHH-219, OHH-222, and OHH-238). `OnMainFrame` and the 0.1 s timer call `StreamOverlay.Format` and `SetStats`. The presenter now drops duplicate publishes and throttles the mesh, but the call still happens on every presented frame.
-- OHH-238 perception files are not in this branch. That job is adding `Assets/Scripts/Video/DetectionOverlay.cs` and `Assets/Scripts/Video/BevFloorPanel.cs`. Re-check both for per-frame text and per-frame overlay allocations before measuring the detector budget.
-- OHH-219 operate-layout files are not in this branch. That job is adding `Assets/Scripts/UI/Operate/`. Re-check those panels for per-frame TMP before measuring.
+- Perception overlays planned under OHH-238 include `Assets/Scripts/Video/DetectionOverlay.cs` and `Assets/Scripts/Video/BevFloorPanel.cs`. Re-check both for per-frame text and per-frame overlay allocations before measuring the detector budget.
+- Operate-layout panels planned under OHH-219 include `Assets/Scripts/UI/Operate/`. Re-check those panels for per-frame TMP before measuring.
 
 ## Human TODOs
 
