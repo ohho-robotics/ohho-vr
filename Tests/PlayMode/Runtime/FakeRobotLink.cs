@@ -21,6 +21,7 @@ namespace OmniBot.VR.PlayMode
 
         public readonly List<Publication> Publications = new List<Publication>();
         public readonly List<Advertisement> Advertisements = new List<Advertisement>();
+        public readonly List<ServiceInvocation> ServiceCalls = new List<ServiceInvocation>();
 
         readonly Dictionary<string, List<Action<string>>> _subscribers =
             new Dictionary<string, List<Action<string>>>();
@@ -35,6 +36,13 @@ namespace OmniBot.VR.PlayMode
         {
             public string Topic;
             public string Type;
+        }
+
+        public struct ServiceInvocation
+        {
+            public string Service;
+            public string Type;
+            public Action<bool, string> Callback;
         }
 
         public void Advertise(string topic, string type)
@@ -61,6 +69,16 @@ namespace OmniBot.VR.PlayMode
         public void Unsubscribe(string topic)
         {
             _subscribers.Remove(topic);
+        }
+
+        public void CallService(string service, string type, Action<bool, string> onResponse)
+        {
+            ServiceCalls.Add(new ServiceInvocation
+            {
+                Service = service,
+                Type = type,
+                Callback = onResponse,
+            });
         }
 
         public bool HasAdvertised(string topic, string type)

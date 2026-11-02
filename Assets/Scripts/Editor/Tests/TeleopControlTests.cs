@@ -11,32 +11,35 @@ using OmniBot.VR.Core.Platform;
 namespace OmniBot.VR.Tests
 {
     /// <summary>
-    /// In-memory fake transport for testing drive schemes without WebSocket networking.
-    /// </summary>
-    public class FakeRobotLink : IRobotLink
-    {
-        public bool IsConnected { get; set; } = true;
-        public readonly List<(string topic, object msg)> Published = new List<(string, object)>();
-        public readonly List<(string topic, string type)> Advertised = new List<(string, string)>();
-
-        public void Advertise(string topic, string type) => Advertised.Add((topic, type));
-
-        public void Publish<T>(string topic, T msg) => Published.Add((topic, msg));
-
-        public void Subscribe(string topic, string type, Action<string> callback) { }
-
-        public void Unsubscribe(string topic) { }
-
-        public void Clear() => Published.Clear();
-    }
-
-    /// <summary>
     /// Unit tests for teleoperation drive schemes: deadman grip enforcement
     /// (on by default), latched emergency stop, the hard 0.2 m/s turbo cap,
     /// and control-mode transitions.
     /// </summary>
     public class TeleopControlTests
     {
+        /// <summary>
+        /// In-memory fake transport for testing drive schemes without WebSocket networking.
+        /// Nested so it does not collide with <see cref="FakeRobotLink"/> from main.
+        /// </summary>
+        private sealed class FakeRobotLink : IRobotLink
+        {
+            public bool IsConnected { get; set; } = true;
+            public readonly List<(string topic, object msg)> Published = new List<(string, object)>();
+            public readonly List<(string topic, string type)> Advertised = new List<(string, string)>();
+
+            public void Advertise(string topic, string type) => Advertised.Add((topic, type));
+
+            public void Publish<T>(string topic, T msg) => Published.Add((topic, msg));
+
+            public void Subscribe(string topic, string type, Action<string> callback) { }
+
+            public void Unsubscribe(string topic) { }
+
+            public void CallService(string service, string type, Action<bool, string> onResponse) { }
+
+            public void Clear() => Published.Clear();
+        }
+
         private RobotProfile MakeOmniBotProfile()
         {
             return new RobotProfile

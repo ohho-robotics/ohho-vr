@@ -85,6 +85,14 @@ namespace OmniBot.VR.Control.Drive
             + " · Right grip: turbo (clamped to 0.2 m/s) · Both grips: e-stop (latched until left X reset)";
 
         /// <summary>
+        /// While true, thumbstick velocity is not published. E-stop edges still
+        /// run. <see cref="Safety.TeleopSafetySession"/> sets this when the robot
+        /// e-stop is latched, or until a deadman re-press after link loss or the
+        /// headset coming off. Cleared on <see cref="Configure"/>.
+        /// </summary>
+        public bool SuppressMotion { get; set; }
+
+        /// <summary>
         /// Control-mode string published after the idle timeout. Ground robots
         /// revert to "nav2"; aerial/underwater robots can override (e.g. "offboard"
         /// or an empty string to leave the mode untouched).
@@ -111,6 +119,7 @@ namespace OmniBot.VR.Control.Drive
             // only sticks in the editor/simulator.
             RequireDeadman = profile == null || profile.RequireDeadman;
             ActiveLinVelLimit = profile != null ? Mathf.Max(0f, profile.MaxLinVel) : 0f;
+            SuppressMotion = false;
             _prevVx = _prevVy = _prevVz = _prevWz = 0f;
         }
 
@@ -139,7 +148,7 @@ namespace OmniBot.VR.Control.Drive
             HandleEmergencyStop(ref input, link);
             if (EmergencyStopActive)
             {
-                if (IsPublishing)
+                if (IsPublishing && !string.IsNullOrEmpty(Profile.Topics?.CmdVel))
                 {
                     link.Publish(Profile.Topics.CmdVel, ZeroTwist());
                     IsPublishing = false;
@@ -153,7 +162,19 @@ namespace OmniBot.VR.Control.Drive
             if (!deadmanEngaged)
             {
                 // Deadman released: immediately halt base motion and revert control mode
-                if (IsPublishing)
+                if (IsPublishing && !string.IsNullOrEmpty(Profile.Topics?.CmdVel))
+                {
+                    link.Publish(Profile.Topics.CmdVel, ZeroTwist());
+                    IsPublishing = false;
+                }
+                UpdateControlMode(false, input.DeltaTime, link);
+                return;
+            }
+
+            // Latched safety state, or motion held until a deadman re-press.
+            if (SuppressMotion)
+            {
+                if (IsPublishing && !string.IsNullOrEmpty(Profile.Topics?.CmdVel))
                 {
                     link.Publish(Profile.Topics.CmdVel, ZeroTwist());
                     IsPublishing = false;
