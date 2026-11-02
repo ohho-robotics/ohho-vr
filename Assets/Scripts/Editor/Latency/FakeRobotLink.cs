@@ -69,6 +69,10 @@ namespace OmniBot.VR.Latency
             _subscribers.Remove(topic);
         }
 
+        public void CallService(string service, string type, Action<bool, string> onResponse)
+        {
+        }
+
         public void Inject(string topic, string json)
         {
             Deliver(topic, json);

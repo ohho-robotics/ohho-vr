@@ -37,7 +37,7 @@ namespace OmniBot.VR.Tests
         {
             ManualLatencyClock clock = new ManualLatencyClock(1_000_000);
             LatencySession session = new LatencySession(LatencyProfile.Local, clock);
-            FakeRobotLink link = new FakeRobotLink(session, clock);
+            OmniBot.VR.Latency.FakeRobotLink link = new OmniBot.VR.Latency.FakeRobotLink(session, clock);
             link.Connect();
             string delivered = null;
             link.Subscribe("/odom", "nav_msgs/Odometry", json => delivered = json);
@@ -99,7 +99,7 @@ namespace OmniBot.VR.Tests
                 long ack = 1_000_000 + 30;
                 session.ObserveIncoming(
                     LatencyBudget.CommandAckTopic,
-                    "{\"header\":{\"stamp\":" + FakeRobotLink.StampJson(ack) + "}}");
+                    "{\"header\":{\"stamp\":" + OmniBot.VR.Latency.FakeRobotLink.StampJson(ack) + "}}");
                 LatencySegmentSummary row = session.BuildReport().Find("input_to_command");
                 Assert.AreEqual(LatencyVerdict.Pass, row.Verdict, profiles[i].ToString());
                 Assert.AreEqual(30L, row.P95Ms.Value);
@@ -111,7 +111,7 @@ namespace OmniBot.VR.Tests
         {
             ManualLatencyClock clock = new ManualLatencyClock(1_000_000);
             LatencySession session = new LatencySession(LatencyProfile.Local, clock);
-            FakeRobotLink link = new FakeRobotLink(session, clock)
+            OmniBot.VR.Latency.FakeRobotLink link = new OmniBot.VR.Latency.FakeRobotLink(session, clock)
             {
                 AutoHeartbeat = false,
                 MotionDelayMs = 400,
@@ -137,7 +137,7 @@ namespace OmniBot.VR.Tests
         {
             ManualLatencyClock clock = new ManualLatencyClock(10_000);
             LatencySession session = new LatencySession(LatencyProfile.Local, clock);
-            FakeRobotLink link = new FakeRobotLink(session, clock) { AutoHeartbeat = false };
+            OmniBot.VR.Latency.FakeRobotLink link = new OmniBot.VR.Latency.FakeRobotLink(session, clock) { AutoHeartbeat = false };
             link.Connect();
             session.MarkInput();
             link.Publish(CmdVelTopic, ZeroTwist);
@@ -152,7 +152,7 @@ namespace OmniBot.VR.Tests
             const string payload = "{\"data\":true}";
             ManualLatencyClock clock = new ManualLatencyClock(10_000);
             LatencySession session = new LatencySession(LatencyProfile.Local, clock);
-            FakeRobotLink link = new FakeRobotLink(session, clock) { AutoHeartbeat = false };
+            OmniBot.VR.Latency.FakeRobotLink link = new OmniBot.VR.Latency.FakeRobotLink(session, clock) { AutoHeartbeat = false };
             link.Connect();
             link.Publish(EmergencyStopTopic, payload);
             clock.Advance(80);
@@ -339,7 +339,7 @@ namespace OmniBot.VR.Tests
         {
             ManualLatencyClock clock = new ManualLatencyClock(1000);
             LatencySession session = new LatencySession(LatencyProfile.Local, clock);
-            FakeRobotLink link = new FakeRobotLink(session, clock) { AutoHeartbeat = false };
+            OmniBot.VR.Latency.FakeRobotLink link = new OmniBot.VR.Latency.FakeRobotLink(session, clock) { AutoHeartbeat = false };
             link.Publish(CmdVelTopic, MovingTwist);
             Assert.AreEqual(0, link.Published.Count);
             Assert.AreEqual(0, session.BuildReport().Samples.Count);
@@ -378,12 +378,12 @@ namespace OmniBot.VR.Tests
 
         private static string Odom(long stampMs, double linearX)
         {
-            return FakeRobotLink.OdomJson(stampMs, linearX);
+            return OmniBot.VR.Latency.FakeRobotLink.OdomJson(stampMs, linearX);
         }
 
         private static string JointState(long stampMs, string positions)
         {
-            return "{\"header\":{\"stamp\":" + FakeRobotLink.StampJson(stampMs)
+            return "{\"header\":{\"stamp\":" + OmniBot.VR.Latency.FakeRobotLink.StampJson(stampMs)
                 + "},\"name\":[\"j0\",\"j1\"],\"position\":[" + positions + "],\"velocity\":[0,0]}";
         }
 

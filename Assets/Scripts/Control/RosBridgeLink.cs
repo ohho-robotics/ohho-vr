@@ -28,5 +28,8 @@ namespace OmniBot.VR.Control
 
         public void Unsubscribe(string topic)
             => ROSBridgeClient.Instance.Unsubscribe(topic);
+
+        public void CallService(string service, string type, Action<bool, string> onResponse)
+            => ROSBridgeClient.Instance.CallService(service, type, onResponse);
     }
 }
