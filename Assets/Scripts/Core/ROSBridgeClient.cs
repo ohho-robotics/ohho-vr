@@ -6,6 +6,7 @@ using UnityEngine;
 using NativeWebSocket;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using OmniBot.VR.Latency;
 using OmniBot.VR.Telemetry;
 
 namespace OmniBot.VR.Core
@@ -180,8 +181,18 @@ namespace OmniBot.VR.Core
             }
             NoteOutgoing(msg);
             var wrapper = new ROSPublishMessage<T>(topic, msg);
-            SendJson(JsonConvert.SerializeObject(wrapper));
+            string json = JsonConvert.SerializeObject(wrapper);
+            SendJson(json);
             NotifyPublished(topic, msg);
+            // After the send is handed off. Observation must not delay or drop the command.
+            if (LatencyCapture.IsEnabled)
+            {
+                try { LatencyCapture.ObserveOutgoing(topic, json); }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning("[ROSBridgeClient] Latency observe failed: " + ex.Message);
+                }
+            }
         }
 
         private static void NotifyPublished(string topic, object msg)
@@ -514,6 +525,15 @@ namespace OmniBot.VR.Core
             {
                 OnProtocolMessage?.Invoke(json);
                 return;
+            }
+
+            if (LatencyCapture.IsEnabled)
+            {
+                try { LatencyCapture.ObserveIncoming(topic, json); }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning("[ROSBridgeClient] Latency observe failed: " + ex.Message);
+                }
             }
 
             List<Action<string>> callbacks = null;
