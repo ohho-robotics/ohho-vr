@@ -55,6 +55,9 @@ namespace OmniBot.VR.Control
 
         public void Unsubscribe(string topic) => Ensure().Unsubscribe(topic);
 
+        public void CallService(string service, string type, System.Action<bool, string> onResponse)
+            => Ensure().CallService(service, type, onResponse);
+
         SimulatedRobotLink Ensure()
         {
             if (_link == null)
