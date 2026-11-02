@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using NUnit.Framework;
 using UnityEngine;
 using OmniBot.VR.Control;
+using OmniBot.VR.Control.Safety;
 using OmniBot.VR.Control.Session;
 using OmniBot.VR.Core;
 
@@ -165,6 +166,19 @@ namespace OmniBot.VR.Tests
             Assert.IsTrue(link.IsConnected);
             link.Publish("/cmd_vel/teleop", new TwistMsg(new Vector3Msg(0.1f, 0f, 0f), new Vector3Msg(0f, 0f, 0f)));
             Assert.AreEqual(0.1f, link.LastTwist.linear.x, 0.0001f);
+
+            bool called = false;
+            bool ok = true;
+            string values = "unset";
+            link.CallService(OhhoSafetyContract.EstopResetService, OhhoSafetyContract.EstopResetType, (success, payload) =>
+            {
+                called = true;
+                ok = success;
+                values = payload;
+            });
+            Assert.IsTrue(called);
+            Assert.IsFalse(ok);
+            Assert.AreEqual("", values);
         }
 
         [Test]
@@ -401,6 +415,31 @@ namespace OmniBot.VR.Tests
             Assert.AreEqual("desktop-sim", endpoint.Label);
             Assert.AreEqual("announcement", endpoint.Source);
             Assert.AreEqual(1, endpoint.VideoUrls.Count);
+        }
+
+        [Test]
+        public void UnknownKind_IsNotFiledAsSim()
+        {
+            const string json = "[{\"id\":\"x\",\"robot_id\":\"omnibot\",\"kind\":\"physical\",\"target\":\"local\",\"rosbridge_url\":\"ws://10.0.0.8:9090\"}]";
+            var rows = RobotSessionRows.Parse(json, out var error);
+            Assert.IsNull(error);
+            Assert.AreEqual(0, rows.Count);
+
+            var announced = new Dictionary<string, string>
+            {
+                { "kind", "physical" },
+                { "target", "local" },
+                { "rosbridge", "ws://10.0.0.8:9090" },
+            };
+            Assert.IsFalse(RobotSessionRows.TryFromAnnouncement(announced, "omnibot", out _, out var announceError));
+            StringAssert.Contains("kind", announceError);
+
+            const string offline = "[{\"id\":\"off\",\"robot_id\":\"omnibot\",\"kind\":\"offline\",\"target\":\"local\"}]";
+            var offlineRows = RobotSessionRows.Parse(offline, out var offlineError);
+            Assert.IsNull(offlineError);
+            Assert.AreEqual(1, offlineRows.Count);
+            Assert.IsTrue(offlineRows[0].Offline);
+            Assert.AreEqual(SessionKind.Sim, offlineRows[0].Kind);
         }
     }
 }
