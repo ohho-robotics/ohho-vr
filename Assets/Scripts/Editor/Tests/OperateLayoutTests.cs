@@ -509,6 +509,8 @@ namespace OmniBot.VR.Tests
             public void Publish<T>(string topic, T msg) => Published.Add((topic, msg));
             public void Subscribe(string topic, string type, System.Action<string> callback) { }
             public void Unsubscribe(string topic) { }
+
+            public void CallService(string service, string type, System.Action<bool, string> onResponse) { }
         }
     }
 }
