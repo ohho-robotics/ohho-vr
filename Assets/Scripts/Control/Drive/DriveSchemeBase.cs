@@ -131,7 +131,7 @@ namespace OmniBot.VR.Control.Drive
             return (input.LeftGrip || input.RightGrip) && !input.BothGrips;
         }
 
-        public void Tick(ref TeleopInput input, IRobotLink link)
+        public virtual void Tick(ref TeleopInput input, IRobotLink link)
         {
             if (!IsConfigured || Profile == null || !link.IsConnected) return;
 
@@ -210,7 +210,7 @@ namespace OmniBot.VR.Control.Drive
             }
         }
 
-        public void Stop(IRobotLink link)
+        public virtual void Stop(IRobotLink link)
         {
             // Headset haptics stop with teleop. The latch stays set, and this
             // does not publish emergency_stop false — only ClearEmergencyStop
