@@ -97,7 +97,9 @@ namespace OmniBot.VR.Control.Safety
 
         public static bool IsDeadmanHeld(in TeleopInput input)
         {
-            return (input.LeftGrip || input.RightGrip) && !input.BothGrips;
+            // Left grip is the deadman. Right grip alone does not enable motion,
+            // and both grips are an e-stop chord rather than a second deadman.
+            return input.LeftGrip && !input.BothGrips;
         }
 
         /// <summary>

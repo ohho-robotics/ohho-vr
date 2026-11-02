@@ -186,7 +186,7 @@ namespace OmniBot.VR.Tests
         public void HeldGripAcrossReconnect_DoesNotCountUntilReleaseAndPress()
         {
             var input = Forward(0.1f);
-            input.RightGrip = true;
+            input.LeftGrip = true;
             _session.Start(_link);
             _session.Tick(_link, ref input, _drive, null, null);
 
@@ -200,12 +200,12 @@ namespace OmniBot.VR.Tests
             Assert.IsTrue(_session.AwaitingDeadman);
             AssertNoForwardAfter(_link, mark);
 
-            input.RightGrip = false;
+            input.LeftGrip = false;
             _session.Tick(_link, ref input, _drive, null, null);
             Assert.IsTrue(_session.AwaitingDeadman);
             AssertNoForwardAfter(_link, mark);
 
-            input.RightGrip = true;
+            input.LeftGrip = true;
             input.DeltaTime = 0.1f;
             _session.Tick(_link, ref input, _drive, null, null);
             Assert.IsFalse(_session.AwaitingDeadman);

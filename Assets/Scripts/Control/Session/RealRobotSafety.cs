@@ -54,9 +54,8 @@ namespace OmniBot.VR.Control.Session
         public static void Apply(RobotProfile profile, SessionKind kind)
         {
             if (profile == null) return;
+            profile.Kind = kind;
             profile.RequireDeadman = true;
-            if (kind == SessionKind.Real)
-                profile.RequireDeadman = true;
         }
     }
 

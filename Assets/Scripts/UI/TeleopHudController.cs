@@ -70,6 +70,7 @@ namespace OmniBot.VR.UI
         [Header("Safety (OHH-202)")]
         [SerializeField] private Image safetyBanner;
         [SerializeField] private TMP_Text safetyStatusText;
+        [SerializeField] private Button emergencyStopButton;
         [SerializeField] private Button estopResetButton;
         [SerializeField] private Button estopConfirmButton;
 
@@ -138,6 +139,7 @@ namespace OmniBot.VR.UI
             if (discardButton != null) discardButton.onClick.AddListener(OnDiscard);
             if (exportButton != null) exportButton.onClick.AddListener(OnExportAll);
             if (backButton != null) backButton.onClick.AddListener(OnBack);
+            if (emergencyStopButton != null) emergencyStopButton.onClick.AddListener(OnHudEmergencyStop);
             if (estopResetButton != null) estopResetButton.onClick.AddListener(OnEstopResetClicked);
             if (estopConfirmButton != null) estopConfirmButton.onClick.AddListener(OnEstopConfirmClicked);
             EnsureTelemetryWidgets();
@@ -173,6 +175,7 @@ namespace OmniBot.VR.UI
             if (discardButton != null) discardButton.onClick.RemoveListener(OnDiscard);
             if (exportButton != null) exportButton.onClick.RemoveListener(OnExportAll);
             if (backButton != null) backButton.onClick.RemoveListener(OnBack);
+            if (emergencyStopButton != null) emergencyStopButton.onClick.RemoveListener(OnHudEmergencyStop);
             if (estopResetButton != null) estopResetButton.onClick.RemoveListener(OnEstopResetClicked);
             if (estopConfirmButton != null) estopConfirmButton.onClick.RemoveListener(OnEstopConfirmClicked);
             if (telemetryModeButton != null) telemetryModeButton.onClick.RemoveListener(OnTelemetryMode);
@@ -497,6 +500,8 @@ namespace OmniBot.VR.UI
             RobotProfile profile = _teleop != null ? _teleop.Profile : null;
             double lin = profile != null && profile.MaxLinVel > 0f ? profile.MaxLinVel : RobotConfig.MAX_LINEAR_VEL;
             double ang = profile != null && profile.MaxAngVel > 0f ? profile.MaxAngVel : RobotConfig.MAX_ANGULAR_VEL;
+            if (profile != null && profile.HardMaxLinVel > 0f) lin = System.Math.Min(lin, profile.HardMaxLinVel);
+            if (profile != null && profile.HardMaxAngVel > 0f) ang = System.Math.Min(ang, profile.HardMaxAngVel);
             _composer.SetHardCaps(lin, ang);
             _composer.SetArmPresent(profile == null || profile.HasArm);
         }
@@ -753,6 +758,12 @@ namespace OmniBot.VR.UI
 
         // ── Safety state + e-stop reset ───────────────────────────────────────
 
+        private void OnHudEmergencyStop()
+        {
+            if (_teleop == null) _teleop = FindObjectOfType<Control.TeleopController>();
+            _teleop?.RequestHudEmergencyStop();
+        }
+
         private void OnEstopResetClicked()
         {
             if (_teleop == null) _teleop = FindObjectOfType<Control.TeleopController>();
@@ -808,6 +819,7 @@ namespace OmniBot.VR.UI
             {
                 _resetLabel = estopResetButton.GetComponentInChildren<TMP_Text>();
                 _confirmLabel = estopConfirmButton.GetComponentInChildren<TMP_Text>();
+                EnsureHudEstopButton(estopResetButton.transform.parent);
                 return;
             }
 
@@ -843,6 +855,18 @@ namespace OmniBot.VR.UI
             PlaceHudButton(estopConfirmButton, new Vector2(-40f, 0f));
             if (_confirmLabel != null) _confirmLabel.color = Color.black;
             estopConfirmButton.gameObject.SetActive(false);
+            EnsureHudEstopButton(bannerGo.transform);
+        }
+
+        private void EnsureHudEstopButton(Transform parent)
+        {
+            if (emergencyStopButton != null || parent == null) return;
+            TMP_FontAsset font = connectionStatusText != null ? connectionStatusText.font : null;
+            Sprite uiSprite = connectButton != null ? connectButton.GetComponent<Image>()?.sprite : null;
+            if (uiSprite == null && connectionDot != null) uiSprite = connectionDot.sprite;
+            emergencyStopButton = CreateHudButton(
+                "E-Stop", parent, font, uiSprite, "E-Stop", LatchedColor, out _);
+            PlaceHudButton(emergencyStopButton, new Vector2(200f, 0f));
         }
 
         private static TMP_Text CreateLabel(string name, Transform parent, TMP_FontAsset font, float size, TextAlignmentOptions align)

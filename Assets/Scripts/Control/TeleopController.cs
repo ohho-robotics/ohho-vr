@@ -109,8 +109,10 @@ namespace OmniBot.VR.Control
         private GameObject _ownedOrigin;
         private WorkspaceSphereVisual _workspaceVisual;
 
-        // ── Previous both-grips state for edge detection ─────────────────────────
+        // ── Button edges, and a HUD e-stop press held until the scheme latches ─
         private bool _prevBothGrips;
+        private bool _prevEmergencyChord;
+        private bool _hudEmergencyStop;
         private bool _ownsLatencyCapture;
         private TeleopInput _lastInput;
         private SimServeAerialClient _aerialClient;
@@ -238,9 +240,9 @@ namespace OmniBot.VR.Control
             var input = ReadInput();
             _lastInput = input;
 
-            // Tell a running policy about the same both-grips edge the drive
-            // uses for e-stop. Exceptions must not skip the drive tick.
-            if (input.BothGripsPressed)
+            // Both grips and A+B latch e-stop. A policy must yield on either edge.
+            // Exceptions must not skip the drive tick.
+            if (input.BothGripsPressed || input.EmergencyStopPressed)
                 Raise(EmergencyStopChanged, true);
             else if (input.BothGripsReleased)
                 Raise(EmergencyStopChanged, false);
@@ -280,6 +282,9 @@ namespace OmniBot.VR.Control
                 _drive.Tick(ref aerialInput, Link);
             }
 
+            if (_hudEmergencyStop && _drive is DriveSchemeBase latchedDrive && latchedDrive.IsEmergencyStopActive)
+                _hudEmergencyStop = false;
+
             RememberLatchEndpoint();
         }
 
@@ -293,8 +298,13 @@ namespace OmniBot.VR.Control
             bool rightGrip = OVRInput.Get(OVRInput.Button.SecondaryHandTrigger, OVRInput.Controller.RTouch) ||
                              OVRInput.Get(OVRInput.Axis1D.SecondaryHandTrigger, OVRInput.Controller.RTouch) > 0.8f;
             bool bothGrips = leftGrip && rightGrip;
-            // Left X is the explicit e-stop reset. Grip release must not clear it:
-            // one grip is the deadman and the right grip is also turbo.
+            // A and B together latch e-stop. Right trigger is the arm clutch and,
+            // in a kind=sim session only, base turbo. Left X starts the clear.
+            bool buttonA = OVRInput.Get(OVRInput.Button.One, OVRInput.Controller.RTouch);
+            bool buttonB = OVRInput.Get(OVRInput.Button.Two, OVRInput.Controller.RTouch);
+            bool rightTrigger = OVRInput.Get(OVRInput.Button.SecondaryIndexTrigger, OVRInput.Controller.RTouch) ||
+                                OVRInput.Get(OVRInput.Axis1D.SecondaryIndexTrigger, OVRInput.Controller.RTouch) > 0.8f;
+            bool emergencyChord = buttonA && buttonB;
             bool resetEStop = OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.LTouch);
 
             var input = new TeleopInput
@@ -303,9 +313,14 @@ namespace OmniBot.VR.Control
                 RightStick = rightStick,
                 LeftGrip = leftGrip,
                 RightGrip = rightGrip,
+                RightTrigger = rightTrigger,
+                ButtonA = buttonA,
+                ButtonB = buttonB,
                 BothGrips = bothGrips,
                 BothGripsPressed = bothGrips && !_prevBothGrips,
                 BothGripsReleased = !bothGrips && _prevBothGrips,
+                EmergencyStopPressed = emergencyChord && !_prevEmergencyChord,
+                HudEmergencyStop = _hudEmergencyStop,
                 ResetEmergencyStop = resetEStop,
                 DeltaTime = Time.deltaTime,
             };
@@ -313,6 +328,7 @@ namespace OmniBot.VR.Control
                 input,
                 ComfortSettingsStore.Current.LeftHandedControls);
             _prevBothGrips = bothGrips;
+            _prevEmergencyChord = emergencyChord;
             return input;
         }
 
@@ -471,6 +487,9 @@ namespace OmniBot.VR.Control
             Profile = null;
             _wasThumbsUp = false;
             _thumbsUpHoldTimer = 0f;
+            _prevBothGrips = false;
+            _prevEmergencyChord = false;
+            _hudEmergencyStop = false;
             if (LatencyCapture.IsEnabled)
                 LatencyCapture.ClearInputSample();
             _thumbsUpPulse = false;
@@ -517,6 +536,16 @@ namespace OmniBot.VR.Control
 
         /// <summary>Fired after the schemes stop. A running policy must hand back first.</summary>
         public event Action TeleopSessionStopped;
+
+        /// <summary>
+        /// HUD e-stop. Latches until Reset plus a deadman release and re-press.
+        /// Releasing the button does not clear it. The request sticks until a
+        /// connected tick accepts it.
+        /// </summary>
+        public void RequestHudEmergencyStop()
+        {
+            _hudEmergencyStop = true;
+        }
 
         /// <summary>First tap arms the confirm. Second tap calls <c>/ohho/estop_reset</c>.</summary>
         public void RequestEstopReset() => _safety.RequestEstopReset();

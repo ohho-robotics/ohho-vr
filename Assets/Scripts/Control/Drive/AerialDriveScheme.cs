@@ -18,7 +18,7 @@ namespace OmniBot.VR.Control.Drive
     public sealed class AerialDriveScheme : DriveSchemeBase
     {
         public override string HudHint =>
-            "Left Y: climb · Left X: yaw nose-right · Right stick: forward/right · Grip: deadman · Both grips: e-stop (latched until left X) · Takeoff/Land: buttons";
+            "Left Y: climb · Left X: yaw nose-right · Right stick: forward/right · Either grip: deadman · No turbo · Both grips, A+B, or HUD: e-stop (latched until Reset, then release and re-press the deadman) · Takeoff/Land: buttons";
 
         protected override string IdleMode => "offboard";
 
@@ -94,21 +94,24 @@ namespace OmniBot.VR.Control.Drive
         {
             if (!IsConfigured || Profile == null) return;
 
-            // Sim-serve has its own grip deadman. The Ohho e-stop is also the
-            // latched base stop: both grips set it, and releasing the grips
-            // does not clear it. Left X does.
-            if (input.BothGrips && !EmergencyStopActive)
-                TriggerEmergencyStop(link);
-            else if (input.ResetEmergencyStop && EmergencyStopActive && !input.BothGrips)
-                ClearEmergencyStop(link);
+            // Sim-serve has its own grip deadman (either grip). The Ohho e-stop
+            // latches on both grips, A+B, or the HUD button. Releasing them does
+            // not clear it. Clearing takes Reset, then a left-grip release and re-press.
+            // There is no turbo on this path.
+            RobotClassCaps.Ensure(Profile);
+            HandleEmergencyStop(ref input, link);
 
             bool latched = EmergencyStopActive;
+            float linCap = Mathf.Max(0f, Profile.MaxLinVel);
+            float angCap = Mathf.Max(0f, Profile.MaxAngVel);
+            if (Profile.HardMaxLinVel > 0f) linCap = Mathf.Min(linCap, Profile.HardMaxLinVel);
+            if (Profile.HardMaxAngVel > 0f) angCap = Mathf.Min(angCap, Profile.HardMaxAngVel);
             var mapped = new AerialMappingInput
             {
                 RobotId = Profile.RobotId,
                 RobotName = Profile.Name,
-                MaxLinVel = Profile.MaxLinVel,
-                MaxAngVel = Profile.MaxAngVel,
+                MaxLinVel = linCap,
+                MaxAngVel = angCap,
                 LeftX = latched ? 0f : input.LeftStick.x,
                 LeftY = latched ? 0f : input.LeftStick.y,
                 RightX = latched ? 0f : input.RightStick.x,
@@ -179,8 +182,12 @@ namespace OmniBot.VR.Control.Drive
             // signs, still with no turbo. The grip deadman and the latched
             // e-stop live in Tick, not in this twist helper.
             _ = speedMult;
+            float linCap = Profile.MaxLinVel;
+            float angCap = Profile.MaxAngVel;
+            if (Profile.HardMaxLinVel > 0f) linCap = Mathf.Min(linCap, Profile.HardMaxLinVel);
+            if (Profile.HardMaxAngVel > 0f) angCap = Mathf.Min(angCap, Profile.HardMaxAngVel);
             AerialAxes axes = AerialDriveMapping.ScaleDeadzoned(
-                lx, ly, rx, ry, Profile.MaxLinVel, Profile.MaxAngVel);
+                lx, ly, rx, ry, linCap, angCap);
             hasInput = axes.Vx != 0f || axes.Vy != 0f || axes.Vz != 0f || axes.YawRate != 0f;
             return new TwistMsg(
                 new Vector3Msg(axes.Vx, axes.Vy, axes.Vz),

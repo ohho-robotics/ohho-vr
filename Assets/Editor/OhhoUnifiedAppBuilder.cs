@@ -392,14 +392,17 @@ namespace OmniBot.VR.Editor
                 "<b>DRIVING</b>\n" +
                 "• Left Joystick: Move Forward/Back/Strafe\n" +
                 "• Right Joystick: Turn (Yaw)\n" +
-                "• Right Grip: Turbo Speed (clamped to 0.2 m/s)\n" +
-                "• Hold one grip to drive (deadman)\n\n" +
+                "• Left grip: deadman (required; release stops the base)\n" +
+                "• Right trigger: arm clutch, and turbo in sim only (OmniBot clamped to 0.2 m/s and 1.0 rad/s; turbo off on a real robot)\n\n" +
                 "<b>ROBOT ARM</b>\n" +
                 "• Right Hand: Move physical hand to move gripper\n" +
                 "• Right Pinch: Open/Close Gripper\n" +
-                "• Left Thumbs-Up (Hold 0.5s): Enable/Clutch Arm\n\n" +
+                "• Right index trigger: clutch. REAL arm needs Left X twice\n" +
+                "• Left Thumbs-Up (Hold 0.5s): request enable (does not confirm a real robot)\n\n" +
                 "<b>SAFETY</b>\n" +
-                "• Both Grips Squeezed: Emergency Stop (latched until left X reset)\n\n" +
+                "• Both grips, A+B, or the HUD e-stop: latched emergency stop\n" +
+                "• Releasing the buttons or grips does not clear it\n" +
+                "• Reset (left X), then release and re-press the left grip\n\n" +
                 "<b>DATASET RECORDING</b>\n" +
                 "• Start/Stop episodes using the right-side Teleop panel.\n" +
                 "• Use the buttons below to trigger ROSBags on the Pi.";

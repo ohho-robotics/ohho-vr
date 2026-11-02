@@ -1,4 +1,6 @@
 using System.Collections.Generic;
+using UnityEngine;
+using OmniBot.VR.Core;
 
 namespace OmniBot.VR.Control
 {
@@ -63,22 +65,30 @@ namespace OmniBot.VR.Control
         public bool Holonomic;
         public int BaseDof;
         public string[] BaseActionLabels;
-        public float MaxLinVel;         // m/s, forward / vertical
+        public float MaxLinVel;         // m/s, forward / vertical. Calibration may only lower this.
         public float MaxLatVel;         // m/s, lateral. 0 when the base cannot strafe
-        public float MaxAngVel;         // rad/s
+        public float MaxAngVel;         // rad/s. Calibration may only lower this.
 
         /// <summary>
-        /// Safety: a grip must be held to drive. Releasing it publishes zero velocity.
-        /// Defaults to true. The only opt-out is <see cref="DisableDeadmanForSimulation"/>,
-        /// and device player builds ignore that call. OHH-59 enforces this in the drive
-        /// loop; the session picker never turns it off for a real robot.
+        /// Session kind. Defaults to <see cref="Session.SessionKind.Real"/>. Only a
+        /// kind=sim session may turn <see cref="RequireDeadman"/> off, and only
+        /// when <see cref="DeadmanOptOutAllowed"/> is true. A real robot keeps
+        /// the deadman on and turbo off.
+        /// </summary>
+        public Session.SessionKind Kind = Session.SessionKind.Real;
+
+        /// <summary>
+        /// Safety: the left grip must be held to drive. Releasing it publishes zero
+        /// velocity on that same tick. Defaults to true. The only opt-out is
+        /// <see cref="DisableDeadmanForSimulation"/> on a <see cref="Session.SessionKind.Sim"/>
+        /// session, and device player builds ignore that call.
         /// </summary>
         public bool RequireDeadman
         {
             get => _requireDeadman;
             set
             {
-                if (!value && !DeadmanOptOutAllowed)
+                if (!value && (Kind != Session.SessionKind.Sim || !DeadmanOptOutAllowed))
                 {
                     _requireDeadman = true;
                     return;
@@ -106,13 +116,14 @@ namespace OmniBot.VR.Control
         }
 
         /// <summary>
-        /// Turn the deadman off for an editor or simulator session. Explicit on purpose:
-        /// a new profile keeps the deadman required. No effect in a device player build.
-        /// The session picker does not call this for a real robot.
+        /// Turn the deadman off. Works only for a <see cref="Session.SessionKind.Sim"/> session
+        /// when <see cref="DeadmanOptOutAllowed"/> is true. A real session and a
+        /// device player build ignore the call.
         /// </summary>
         public void DisableDeadmanForSimulation()
         {
-            RequireDeadman = false;
+            if (Kind != Session.SessionKind.Sim || !DeadmanOptOutAllowed) return;
+            _requireDeadman = false;
         }
 
         /// <summary>Caps copied from the descriptor or the catalog before calibration. Calibration cannot exceed these.</summary>
@@ -211,6 +222,50 @@ namespace OmniBot.VR.Control
         public string UrdfUrl;
 
         public int TotalDof => ArmDof + BaseDof;
+    }
+
+    /// <summary>
+    /// Per-robot-class hard speed ceilings. OmniBot is pinned to
+    /// <see cref="RobotConfig.MAX_LINEAR_VEL"/> / <see cref="RobotConfig.MAX_ANGULAR_VEL"/>.
+    /// Other classes use their <see cref="DriveSpec"/> ceiling so a catalog string
+    /// cannot raise the command above that class.
+    /// </summary>
+    public static class RobotClassCaps
+    {
+        public static bool IsOmniBot(RobotProfile profile)
+        {
+            string id = profile?.RobotId;
+            return id == "omnibot" || id == "omnibot-pro";
+        }
+
+        /// <summary>Fill a missing hard cap. OmniBot's caps are always the class constants.</summary>
+        public static void Ensure(RobotProfile profile)
+        {
+            if (profile == null) return;
+
+            if (IsOmniBot(profile))
+            {
+                float linCap = RobotConfig.MAX_LINEAR_VEL;
+                float angCap = RobotConfig.MAX_ANGULAR_VEL;
+                profile.HardMaxLinVel = profile.HardMaxLinVel > 0f
+                    ? Mathf.Min(profile.HardMaxLinVel, linCap) : linCap;
+                profile.HardMaxAngVel = profile.HardMaxAngVel > 0f
+                    ? Mathf.Min(profile.HardMaxAngVel, angCap) : angCap;
+                if (profile.MaxLinVel > profile.HardMaxLinVel) profile.MaxLinVel = profile.HardMaxLinVel;
+                if (profile.MaxAngVel > profile.HardMaxAngVel) profile.MaxAngVel = profile.HardMaxAngVel;
+                if (profile.HardMaxLatVel > linCap) profile.HardMaxLatVel = linCap;
+                if (profile.MaxLatVel > linCap) profile.MaxLatVel = linCap;
+                return;
+            }
+
+            if (profile.HardMaxLinVel > 0f && profile.HardMaxAngVel > 0f) return;
+
+            var spec = DriveSpecs.Get(profile.Drive);
+            if (profile.HardMaxLinVel <= 0f)
+                profile.HardMaxLinVel = spec.MaxLinVel > 0f ? spec.MaxLinVel : RobotConfig.MAX_LINEAR_VEL;
+            if (profile.HardMaxAngVel <= 0f)
+                profile.HardMaxAngVel = spec.MaxAngVel > 0f ? spec.MaxAngVel : RobotConfig.MAX_ANGULAR_VEL;
+        }
     }
 
     /// <summary>

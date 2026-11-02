@@ -266,6 +266,7 @@ namespace OmniBot.VR.Tests
         {
             var profile = new RobotProfile();
             Assert.IsTrue(profile.RequireDeadman);
+            profile.Kind = SessionKind.Sim;
             profile.DisableDeadmanForSimulation();
             Assert.IsFalse(profile.RequireDeadman);
 
