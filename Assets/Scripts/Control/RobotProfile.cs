@@ -1,21 +1,9 @@
 using System.Collections.Generic;
+using UnityEngine;
 using OmniBot.VR.Core;
 
 namespace OmniBot.VR.Control
 {
-    /// <summary>
-    /// Teleop session. Only <see cref="SessionKind.Sim"/> (kind=sim) may turn the
-    /// deadman off or use turbo. A real session keeps both at the safe setting.
-    /// </summary>
-    public enum SessionKind
-    {
-        /// <summary>A real robot. Deadman stays on. Turbo stays off.</summary>
-        Real,
-
-        /// <summary>kind=sim. The only session that may disable the deadman.</summary>
-        Sim,
-    }
-
     /// <summary>
     /// Where IK is solved for the arm — determines whether the manipulation
     /// scheme streams joint angles (headset-side) or a Cartesian target pose
@@ -27,6 +15,28 @@ namespace OmniBot.VR.Control
         Headset,
         /// <summary>Stream Cartesian target, let MoveIt Servo solve on the robot. Collision-aware.</summary>
         Robot,
+    }
+
+    /// <summary>
+    /// Where the arm commands are going. <see cref="Real"/> is the default so a
+    /// profile that forgot to set this still requires the second confirm.
+    /// Only an explicit simulated garage status selects <see cref="Sim"/>.
+    /// </summary>
+    public enum ArmDeployment
+    {
+        Real = 0,
+        Sim = 1,
+    }
+
+    public static class ArmDeploymentRules
+    {
+        public static ArmDeployment FromGarageStatus(string status)
+        {
+            if (!string.IsNullOrEmpty(status) &&
+                status.Trim().Equals("simulated", System.StringComparison.OrdinalIgnoreCase))
+                return ArmDeployment.Sim;
+            return ArmDeployment.Real;
+        }
     }
 
     /// <summary>
@@ -55,39 +65,30 @@ namespace OmniBot.VR.Control
         public bool Holonomic;
         public int BaseDof;
         public string[] BaseActionLabels;
-        public float MaxLinVel;         // m/s, calibration may only lower this
-        public float MaxAngVel;         // rad/s, calibration may only lower this
+        public float MaxLinVel;         // m/s, forward / vertical. Calibration may only lower this.
+        public float MaxLatVel;         // m/s, lateral. 0 when the base cannot strafe
+        public float MaxAngVel;         // rad/s. Calibration may only lower this.
 
         /// <summary>
-        /// Hard linear ceiling for this robot class, m/s. Applied after calibration
-        /// and after turbo. OmniBot is <see cref="RobotConfig.MAX_LINEAR_VEL"/> (0.2).
-        /// Zero means unset; <see cref="RobotClassCaps.Ensure"/> fills it.
+        /// Session kind. Defaults to <see cref="Session.SessionKind.Real"/>. Only a
+        /// kind=sim session may turn <see cref="RequireDeadman"/> off, and only
+        /// when <see cref="DeadmanOptOutAllowed"/> is true. A real robot keeps
+        /// the deadman on and turbo off.
         /// </summary>
-        public float HardMaxLinVel;
-
-        /// <summary>
-        /// Hard angular ceiling for this robot class, rad/s. OmniBot is
-        /// <see cref="RobotConfig.MAX_ANGULAR_VEL"/> (1.0).
-        /// </summary>
-        public float HardMaxAngVel;
-
-        /// <summary>
-        /// Session kind. Defaults to <see cref="SessionKind.Real"/>. Only a
-        /// kind=sim session may turn <see cref="RequireDeadman"/> off.
-        /// </summary>
-        public SessionKind Kind = SessionKind.Real;
+        public Session.SessionKind Kind = Session.SessionKind.Real;
 
         /// <summary>
         /// Safety: the left grip must be held to drive. Releasing it publishes zero
         /// velocity on that same tick. Defaults to true. The only opt-out is
-        /// <see cref="DisableDeadmanForSimulation"/> on a <see cref="SessionKind.Sim"/> session.
+        /// <see cref="DisableDeadmanForSimulation"/> on a <see cref="Session.SessionKind.Sim"/>
+        /// session, and device player builds ignore that call.
         /// </summary>
         public bool RequireDeadman
         {
             get => _requireDeadman;
             set
             {
-                if (!value && Kind != SessionKind.Sim)
+                if (!value && (Kind != Session.SessionKind.Sim || !DeadmanOptOutAllowed))
                 {
                     _requireDeadman = true;
                     return;
@@ -99,14 +100,48 @@ namespace OmniBot.VR.Control
         private bool _requireDeadman = true;
 
         /// <summary>
-        /// Turn the deadman off. Works only when <see cref="Kind"/> is
-        /// <see cref="SessionKind.Sim"/>. A real session ignores the call.
+        /// True in the editor (EditMode tests, play mode, Meta XR Simulator).
+        /// Quest player builds compile this to false so a profile cannot disable the deadman.
+        /// </summary>
+        public static bool DeadmanOptOutAllowed
+        {
+            get
+            {
+#if UNITY_EDITOR
+                return true;
+#else
+                return false;
+#endif
+            }
+        }
+
+        /// <summary>
+        /// Turn the deadman off. Works only for a <see cref="Session.SessionKind.Sim"/> session
+        /// when <see cref="DeadmanOptOutAllowed"/> is true. A real session and a
+        /// device player build ignore the call.
         /// </summary>
         public void DisableDeadmanForSimulation()
         {
-            if (Kind != SessionKind.Sim) return;
+            if (Kind != Session.SessionKind.Sim || !DeadmanOptOutAllowed) return;
             _requireDeadman = false;
         }
+
+        /// <summary>Caps copied from the descriptor or the catalog before calibration. Calibration cannot exceed these.</summary>
+        public float HardMaxLinVel;
+        public float HardMaxLatVel;
+        public float HardMaxAngVel;
+        public float HardMaxAccelLin;   // m/s^2. 0 = no slew limit (catalog path)
+        public float HardMaxAccelYaw;   // rad/s^2. 0 = no slew limit
+        public float HardMaxJointStep;  // rad per command. 0 = use the 0.15 ceiling
+        public JointSpec[] HardJoints;
+        /// <summary>True when speed and topics came from a RobotDescriptor. Those speeds stay inside the OmniBot ceilings.</summary>
+        public bool CapsFromDescriptor;
+
+        /// <summary>
+        /// Blocks named by descriptor <c>telemetry.fields</c>. Null on the catalog
+        /// path, where the HUD falls back to <see cref="BaseDof"/> and <see cref="HasArm"/>.
+        /// </summary>
+        public string[] TelemetryFields;
 
         // ── Manipulator ───────────────────────────────────────────────────────
         public bool HasArm;
@@ -139,6 +174,25 @@ namespace OmniBot.VR.Control
         /// </summary>
         public float[] ArmLinkLengths;
 
+        /// <summary>
+        /// Sim skips the second confirm. Anything that is not explicitly
+        /// simulated — including a missing garage status — is <see cref="ArmDeployment.Real"/>.
+        /// </summary>
+        public ArmDeployment Deployment = ArmDeployment.Real;
+
+        /// <summary>
+        /// Per-command joint step cap. <see cref="RobotProfileFactory"/> sets
+        /// this from <see cref="Core.RobotDescriptor.MaxJointDeltaRad"/>. The
+        /// manipulation schemes clamp anything larger back down.
+        /// </summary>
+        public float MaxJointDeltaRad = Core.RobotDescriptor.MaxJointDeltaRad;
+
+        /// <summary>
+        /// True only when <c>so101_joint_zeros.json</c> says the SO-101 offsets
+        /// were measured (OHH-94). Stays false while homes are the URDF zero.
+        /// </summary>
+        public bool JointZerosCalibrated;
+
         /// <summary>True if this is a dual-arm humanoid (two arms driven by two hands).</summary>
         public bool IsDualArm;
 
@@ -150,6 +204,22 @@ namespace OmniBot.VR.Control
         /// (collision-aware, higher latency but safer).
         /// </summary>
         public IkLocation IkLocation;
+
+        /// <summary>
+        /// Comma-separated policy ids, or a JSON model list, used when serve
+        /// <c>GET /models</c> is unavailable. OmniBot's list is the ACT VR
+        /// sim-pick checkpoint.
+        /// </summary>
+        public string PolicyModelsFallback;
+
+        /// <summary>
+        /// OhhO Serve origin, for example <c>http://192.168.1.101:8000</c>.
+        /// Empty means the policy panel uses the connected robot IP on port 8000.
+        /// </summary>
+        public string ServeBaseUrl;
+
+        /// <summary>package:// or http URL from the descriptor. Empty on the catalog path.</summary>
+        public string UrdfUrl;
 
         public int TotalDof => ArmDof + BaseDof;
     }
@@ -175,8 +245,16 @@ namespace OmniBot.VR.Control
 
             if (IsOmniBot(profile))
             {
-                profile.HardMaxLinVel = RobotConfig.MAX_LINEAR_VEL;
-                profile.HardMaxAngVel = RobotConfig.MAX_ANGULAR_VEL;
+                float linCap = RobotConfig.MAX_LINEAR_VEL;
+                float angCap = RobotConfig.MAX_ANGULAR_VEL;
+                profile.HardMaxLinVel = profile.HardMaxLinVel > 0f
+                    ? Mathf.Min(profile.HardMaxLinVel, linCap) : linCap;
+                profile.HardMaxAngVel = profile.HardMaxAngVel > 0f
+                    ? Mathf.Min(profile.HardMaxAngVel, angCap) : angCap;
+                if (profile.MaxLinVel > profile.HardMaxLinVel) profile.MaxLinVel = profile.HardMaxLinVel;
+                if (profile.MaxAngVel > profile.HardMaxAngVel) profile.MaxAngVel = profile.HardMaxAngVel;
+                if (profile.HardMaxLatVel > linCap) profile.HardMaxLatVel = linCap;
+                if (profile.MaxLatVel > linCap) profile.MaxLatVel = linCap;
                 return;
             }
 
@@ -198,18 +276,40 @@ namespace OmniBot.VR.Control
     /// </summary>
     public class RobotTopics
     {
-        // Publish (teleop → robot)
-        public string CmdVel;           // base velocity (Twist)
-        public string ControlMode;      // cmd_vel_mux mode string
+        // Publish (teleop → robot). Command topics come from the descriptor when connected.
+        public string CmdVel;           // base velocity (Twist) — descriptor topics.cmd
+        public string ControlMode;      // cmd_vel_mux mode string (not in the descriptor; catalog only)
         public string ArmCommands;      // arm joint positions (JointState) — headset IK
         public string ArmEnable;        // arm enable bool
-        public string EmergencyStop;    // e-stop bool
+        public string EmergencyStop;    // e-stop bool — descriptor topics.estop
         public string IkTargetPose;     // Cartesian EE target (PoseStamped) — robot IK (MoveIt Servo)
+        public string RecordStart;      // dataset episode start (catalog; the descriptor does not name it)
+        public string RecordStop;
 
         // Subscribe (robot → teleop)
-        public string Odom;
+        public string Odom;             // descriptor topics.state
         public string Imu;
         public string JointStates;
+        public string ControlModeActive;
+        public string ArmModeActive;    // catalog only; the descriptor does not name it
+        public string Heartbeat;        // descriptor topics.heartbeat
+        public string Telemetry;        // descriptor topics.telemetry
         public List<string> Images = new List<string>();
+
+        // Policy panel. Empty skips that publish or subscribe.
+        public string ArmCmdMode;
+        public string PolicyEnable;
+        public string PolicyTask;
+        public string PolicyLoad;
+        public string PolicyModels;
+        public string PolicyCmdVel;
+        public string AiStatus;
+
+        // Optional perception topics for the SLAM map panel. Blank fields fall
+        // back to the OmniBot names (/map, /scan, Nav2 costmaps). OHH-228.
+        public string Map;
+        public string Scan;
+        public string GlobalCostmap;
+        public string LocalCostmap;
     }
 }

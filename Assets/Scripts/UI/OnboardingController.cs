@@ -27,7 +27,7 @@ namespace OmniBot.VR.UI
         /// the buttons or grips does not clear it.
         /// </summary>
         public const string SafetyHint =
-            "Left grip: deadman (on unless this is a sim session). A+B or the HUD button latches e-stop. Releasing the buttons or grips does not clear it. Reset, release the deadman, then press it again. Right-trigger turbo is sim-only and clamped to 0.2 m/s on OmniBot.";
+            "Left grip: deadman (on unless this is a sim session). Both grips, A+B, or the HUD button latches e-stop. Releasing the buttons or grips does not clear it. Reset, release the deadman, then press it again. Right index trigger: arm clutch. Right-trigger turbo is sim-only and clamped to 0.2 m/s on OmniBot. REAL arm: Left X twice to enable. After a disconnect or removing the headset, press the deadman again before driving.";
 
         private void Start()
         {

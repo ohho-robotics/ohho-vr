@@ -18,10 +18,10 @@ namespace OmniBot.VR.Control
         /// <summary>Left grip held this frame. This is the deadman.</summary>
         public bool LeftGrip;
 
-        /// <summary>Right grip held this frame. Not a deadman and not turbo.</summary>
+        /// <summary>Right grip held this frame. Not the ground deadman and not turbo. On a quadrotor either grip is the deadman.</summary>
         public bool RightGrip;
 
-        /// <summary>Right index trigger. Turbo in a kind=sim session; ignored on a real robot.</summary>
+        /// <summary>Right index trigger. Arm clutch, and base turbo in a kind=sim session. Ignored as turbo on a real robot.</summary>
         public bool RightTrigger;
 
         /// <summary>Right-controller A button.</summary>
@@ -30,10 +30,10 @@ namespace OmniBot.VR.Control
         /// <summary>Right-controller B button.</summary>
         public bool ButtonB;
 
-        /// <summary>Both grips held. Not an e-stop chord.</summary>
+        /// <summary>Both grips held. This chord latches e-stop.</summary>
         public bool BothGrips;
 
-        /// <summary>Rising edge of both grips. Does not latch e-stop.</summary>
+        /// <summary>Rising edge of both grips. Latches emergency stop.</summary>
         public bool BothGripsPressed;
 
         /// <summary>Falling edge of both grips. Does not clear e-stop.</summary>
@@ -68,5 +68,18 @@ namespace OmniBot.VR.Control
         public Vector3 Position;
         public Quaternion Rotation;
         public float PinchStrength; // [0..1]
+
+        /// <summary>
+        /// High confidence follows the hand. Poor or none keeps the clutch on
+        /// controller joint jog instead of a noisy IK target.
+        /// </summary>
+        public HandTrackingQuality Quality;
+    }
+
+    public enum HandTrackingQuality
+    {
+        None = 0,
+        Poor = 1,
+        Good = 2,
     }
 }

@@ -1,6 +1,7 @@
 using System;
 using UnityEngine;
 using OmniBot.VR.Core;
+using OmniBot.VR.Control;
 
 namespace OmniBot.VR.Recording
 {
@@ -25,7 +26,10 @@ namespace OmniBot.VR.Recording
                 if (_instance == null)
                 {
                     GameObject go = new GameObject("EpisodeManager");
-                    DontDestroyOnLoad(go);
+                    // StartTeleop configures this singleton from edit-mode tests.
+                    // DontDestroyOnLoad is legal only while the player is running.
+                    if (Application.isPlaying)
+                        DontDestroyOnLoad(go);
                     _instance = go.AddComponent<EpisodeManager>();
                 }
                 return _instance;
@@ -42,12 +46,23 @@ namespace OmniBot.VR.Recording
         public event Action<string> OnEpisodeStopped;
         public event Action<string> OnEpisodeDiscarded;
 
+        private string _recordStartTopic = "";
+        private string _recordStopTopic = "";
+
+        /// <summary>Record topics come from the active profile. Empty topics are not published.</summary>
+        public void Configure(RobotProfile profile)
+        {
+            _recordStartTopic = profile?.Topics?.RecordStart ?? "";
+            _recordStopTopic = profile?.Topics?.RecordStop ?? "";
+        }
+
         // ── Unity lifecycle ──────────────────────────────────────────────────
         private void Awake()
         {
             if (_instance != null && _instance != this) { Destroy(gameObject); return; }
             _instance = this;
-            DontDestroyOnLoad(gameObject);
+            if (Application.isPlaying)
+                DontDestroyOnLoad(gameObject);
         }
 
         private void Update()
@@ -80,8 +95,8 @@ namespace OmniBot.VR.Recording
             State              = EpisodeState.Recording;
 
             // Publish /vr/record_start with episode name
-            if (ROSBridgeClient.Instance.IsConnected)
-                ROSBridgeClient.Instance.Publish(RobotConfig.TOPIC_VR_RECORD_START, new StringMsg(episodeName));
+            if (ROSBridgeClient.Instance.IsConnected && !string.IsNullOrEmpty(_recordStartTopic))
+                ROSBridgeClient.Instance.Publish(_recordStartTopic, new StringMsg(episodeName));
 
             Debug.Log($"[EpisodeManager] Episode started: {episodeName}");
             OnEpisodeStarted?.Invoke(episodeName);
@@ -102,8 +117,8 @@ namespace OmniBot.VR.Recording
             State = EpisodeState.Saving;
             string name = CurrentEpisodeName;
 
-            if (ROSBridgeClient.Instance.IsConnected)
-                ROSBridgeClient.Instance.Publish(RobotConfig.TOPIC_VR_RECORD_STOP, new BoolMsg(true));
+            if (ROSBridgeClient.Instance.IsConnected && !string.IsNullOrEmpty(_recordStopTopic))
+                ROSBridgeClient.Instance.Publish(_recordStopTopic, new BoolMsg(true));
 
             Debug.Log($"[EpisodeManager] Episode stopped (saving): {name} — duration {EpisodeDuration:F1}s");
             OnEpisodeStopped?.Invoke(name);
@@ -128,8 +143,8 @@ namespace OmniBot.VR.Recording
             State = EpisodeState.Idle;
             EpisodeDuration = 0f;
 
-            if (ROSBridgeClient.Instance.IsConnected)
-                ROSBridgeClient.Instance.Publish(RobotConfig.TOPIC_VR_RECORD_STOP, new BoolMsg(false));
+            if (ROSBridgeClient.Instance.IsConnected && !string.IsNullOrEmpty(_recordStopTopic))
+                ROSBridgeClient.Instance.Publish(_recordStopTopic, new BoolMsg(false));
 
             Debug.Log($"[EpisodeManager] Episode discarded: {name}");
             OnEpisodeDiscarded?.Invoke(name);

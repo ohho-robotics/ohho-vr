@@ -11,7 +11,7 @@ The app runs **one unified world-space screen** ("OhhO Screen", 1600×1000 at
 0.001 scale ≈ 1.6 m wide) floating 1.6 m in front of the user over
 passthrough. A `WorldSpaceUiPlacer` keeps it facing the user; the header bar
 (OhhO logo + ohho-robotics.com + Open Website button) is always visible, and
-the four pages route inside it:
+the pages route inside it:
 
 ```
 ┌──────────────── OhhO Screen (one canvas, faces the user) ───────────────┐
@@ -20,6 +20,7 @@ the four pages route inside it:
 │ Login page      → email OTP sign-in (Supabase, same account as the site) │
 │ Console page    → VR products from the manifest (today: OhhO Pilot)      │
 │ Garage page     → the user's robots (Supabase user_robots, shared w/web) │
+│ Session page    → Simulate (local / cloud / in-headset) or Drive real     │
 │ Teleop page     → connection + telemetry │ camera feed │ recording/export│
 └──────────────────────────────────────────────────────────────────────────┘
 ```
@@ -108,7 +109,7 @@ One persistent GameObject holding the platform services (each is a singleton):
 | Column | Contents |
 |---|---|
 | Left | Robot name, connection (IP/port/Connect/Disconnect/status dot), telemetry (pose, velocity, arm, mode), control hints, **< Garage** |
-| Center | Camera feed (`CameraFeedController` → MJPEG; WebRTC is roadmap), camera name, **Next Camera** |
+| Center | Camera feed (`CameraFeedController` → WebRTC when signaling answers, else MJPEG), camera name and transport, **Next Camera**. BEV is one of those cameras. The same topic is also a world-space floor quad (`BevFloorPanel`) under `OmniBotTwin` / `TwinView` when that twin is in the scene. The quad is created at teleop start, not saved in `scene1`. |
 | Right | Dataset recording (Start / Stop & Save / Discard, live status), **Export to Robot** (POSTs JSONL to the VR bridge at `:8765`) |
 
 ---
@@ -121,16 +122,23 @@ One persistent GameObject holding the platform services (each is a singleton):
    VR products (today **OhhO Pilot**).
 4. Open Pilot → the **garage** lists the robots from your OhhO account (pulled from
    Supabase `user_robots`). Empty? Add one on the website/app — it appears here.
-5. **Select a robot** → `OhhoVrApp` builds its `RobotProfile` from the catalog and
-   hands it to `TeleopController`. The teleop page opens.
+5. **Select a robot** → the session page asks **Simulate** or **Drive real**.
+   Simulate → Local desktop, Cloud, or In-headset. Drive real shows the safety
+   notice (and the deadman tutorial the first time) before an announced robot
+   or a manual IP. `OhhoVrApp` then builds the `RobotProfile` and hands it to
+   `TeleopController`. The teleop page opens with a blue **SIM** or orange **REAL** banner.
    - **Base:** left stick strafe (vx/vy), right stick X yaw, left grip deadman
-     (on by default; only a kind=sim session may turn it off, and the HUD shows
-     that). Right-trigger turbo is sim-only and clamped to the robot hard cap
-     (OmniBot 0.2 m/s). A+B or the HUD button latches e-stop; clearing takes
-     Reset (left X) plus a deadman release and re-press. Releasing the buttons
-     or grips does not clear it.
-   - **Arm:** right-hand pose → IK → `/arm/joint_commands` @ 20 Hz; pinch →
-     gripper; left-hand thumbs-up (hold 0.5 s) toggles arm enable.
+     (on by default; only a kind=sim session in the editor may turn it off, and
+     the HUD shows that). Right-trigger turbo is sim-only and clamped to the
+     robot hard cap (OmniBot 0.2 m/s and 1.0 rad/s) after calibration. Both grips,
+     A+B, or the HUD button latch e-stop; clearing takes Reset (left X) plus a
+     deadman release and re-press. Releasing the buttons or grips does not clear it.
+   - **Arm:** Left X requests enable (a real robot needs a second Left X
+     before `/arm/enable`). A left-hand thumbs-up (hold 0.5 s) requests enable
+     or turns the arm off and never confirms a real robot. Hold the right index
+     trigger to move — the first command is the pose already held, then the
+     right-hand pose drives IK to `/arm/joint_commands/teleop` @ 20 Hz. Pinch
+     closes the gripper. Poor hand tracking jogs one joint with right stick Y.
    - All topics, joint names and limits come from the profile (OmniBot = SO-101
      6-DOF + mecanum, identical to the old hardcoded constants).
 

@@ -10,8 +10,9 @@ namespace OmniBot.VR.Control
     /// schemes. Mirrors <c>website/lib/connect/types.ts</c>
     /// <c>RobotTransport</c>.
     ///
-    /// Today's only implementation is <see cref="RosBridgeLink"/>, which wraps the
-    /// existing <see cref="ROSBridgeClient"/> singleton.
+    /// Transports: <see cref="RosBridgeLink"/> (live ROSBridge WebSocket) and
+    /// <see cref="SimulatedRobotLink"/> (in-headset, no robot PC). Pick one with
+    /// <see cref="RobotLinkFactory"/>.
     /// </summary>
     public interface IRobotLink
     {
@@ -28,32 +29,12 @@ namespace OmniBot.VR.Control
 
         /// <summary>Unsubscribe all callbacks for a topic.</summary>
         void Unsubscribe(string topic);
-    }
 
-    /// <summary>
-    /// <see cref="IRobotLink"/> backed by the existing
-    /// <see cref="ROSBridgeClient"/> WebSocket singleton. The schemes never touch
-    /// <c>ROSBridgeClient</c> directly — they go through this link so the robot
-    /// transport is swappable and testable. Delegates every call straight through.
-    /// </summary>
-    public sealed class RosBridgeLink : IRobotLink
-    {
-        public static readonly RosBridgeLink Instance = new RosBridgeLink();
-
-        public bool IsConnected => ROSBridgeClient.Instance != null && ROSBridgeClient.Instance.IsConnected;
-
-        private RosBridgeLink() { }
-
-        public void Advertise(string topic, string type)
-            => ROSBridgeClient.Instance.Advertise(topic, type);
-
-        public void Publish<T>(string topic, T msg)
-            => ROSBridgeClient.Instance.Publish(topic, msg);
-
-        public void Subscribe(string topic, string type, Action<string> callback)
-            => ROSBridgeClient.Instance.Subscribe(topic, type, callback);
-
-        public void Unsubscribe(string topic)
-            => ROSBridgeClient.Instance.Unsubscribe(topic);
+        /// <summary>
+        /// rosbridge <c>call_service</c>. <paramref name="onResponse"/> runs on the
+        /// Unity main thread with the call outcome and the <c>values</c> JSON
+        /// (empty on a fake link until the test completes it).
+        /// </summary>
+        void CallService(string service, string type, Action<bool, string> onResponse);
     }
 }

@@ -4,16 +4,21 @@
 
 This repository is the **Meta Quest headset client only**. It does not contain the OhhO website, the Android app, or the robot's ROS 2 workspace.
 
-Unity application for controlling the OmniBot mecanum-wheel robot and SO-101 arm over ROSBridge (WebSocket, v2 JSON). Primary target: **Meta Quest 3 / 3S**. The camera feed in this repo is **MJPEG**. WebRTC is **roadmap**: `WebRtcVideoSource` does not complete signaling, and `com.unity.webrtc` is not in `Packages/manifest.json`.
+Unity application for controlling the OmniBot mecanum-wheel robot and SO-101 arm over ROSBridge (WebSocket, v2 JSON). Primary target: **Meta Quest 3 / 3S**. The camera feed prefers WebRTC (`com.unity.webrtc` 3.0.0, ohho_webrtc signaling) and falls back to MJPEG. Measuring Quest glass-to-glass latency is still roadmap.
 
 The app is a **single unified world-space screen** ("OhhO Screen") that floats
 in front of you in passthrough and always faces you. It is the headset-native
 front end of **ohho-robotics.com**: the same Supabase account, the same garage
 of robots, the same branding — sign in once and everything is already there.
 
-Flow: **Login → Console (VR products) → Garage (your robots) → Teleop** —
-all inside the one screen. A `WorldSpaceUiPlacer` parks it 1.6 m ahead and
-gently billboards it toward you; press **left-controller B** to hide/show it.
+Flow: **Login → Console (VR products) → Garage (your robots) → Simulate or Drive real → Teleop** —
+all inside the one screen. `WorldSpaceUiPlacer` defaults to 1.2 m ahead
+(`distance`) and billboards toward you; a scene value can override that.
+Press **left-controller B** to hide/show it.
+
+Guides: [user guide](docs/user-guide.md), [local sim](docs/setup-local-sim.md),
+[cloud sim](docs/setup-cloud.md) (not ready), [real OmniBot](docs/setup-real-omnibot.md),
+[safety](docs/safety.md).
 
 ---
 
@@ -45,17 +50,9 @@ Unity packages are declared in `Packages/manifest.json` and resolve on first ope
 - Meta OpenXR feature set (hand tracking, passthrough)
 - Android API target: 32+, ARM64
 
-### Apple Vision Pro (roadmap)
+### Apple Vision Pro
 
-visionOS support is planned but not yet implemented. Architecture notes:
-
-- The ROS/ROSBridge layer is identical on the robot side — no changes needed.
-- A separate **SwiftUI + RealityKit** application will replace the Unity app.
-- Hand tracking will use **ARKit HandAnchor** (visionOS 1.1+) instead of OVR Hand API.
-- IK solver logic (`ArmIKSolver.cs`) can be ported directly to Swift with no
-  algorithmic changes — only the Unity `Vector3`/`Quaternion` types need
-  substitution with `simd_float3`/`simd_quatf`.
-- WebSocket connection to ROSBridge uses `URLSessionWebSocketTask`.
+Not in this repository. There is no visionOS target and no Swift project here. The Quest build is the headset client.
 
 ---
 
@@ -63,7 +60,7 @@ visionOS support is planned but not yet implemented. Architecture notes:
 
 1. Open this repository root as a Unity project (Unity Hub → Add project from disk). The only enabled build scene is `Assets/scene1.unity`.
 2. Wait for package resolution (first open takes ~2–5 minutes).
-3. The project is pre-configured with Android Player settings (`com.ohhorobotics.ohhovr`, API level 32–34, ARM64) and OpenXR features (Meta Quest Support, Hand Tracking, Passthrough). If reconfiguring via GUI:
+3. Android player settings are ARM64, IL2CPP, application id `com.ohhorobotics.ohhovr` (API 32–34). OpenXR for Android already enables **Meta Quest Support** and **Hand Tracking**. If you reconfigure in the GUI:
    - Go to **Edit → Project Settings → XR Plug-in Management**.
    - Enable **OpenXR** under the Android tab.
    - Under OpenXR features, enable **Meta Quest support**, **Hand Tracking**, and **Passthrough**.
@@ -71,15 +68,21 @@ visionOS support is planned but not yet implemented. Architecture notes:
    - Switch platform to **Android**.
    - Enable **Development Build** for first deployment (optional).
 5. Build the `.apk`:
-   - Via menu: **OmniBot → Build Quest APK** (uses `OmniBot.VR.Editor.BuildAutomator.BuildQuestApk`).
+   - Via menu: **OmniBot → Build Quest APK** (uses `OmniBot.VR.Editor.BuildAutomator.BuildQuestApk`) and writes `build/Android/OhhO-VR.apk`.
    - Via GUI: Click **Build** (or **Build and Run** with Quest connected over USB with Developer Mode enabled).
    - Via batch mode locally:
      ```
      "C:\Program Files\Unity\Hub\Editor\6000.5.2f1\Editor\Unity.exe" -batchmode -quit -projectPath <clone> -executeMethod OmniBot.VR.Editor.BuildAutomator.BuildQuestApk -logFile build.log
      ```
 
-> **Local build notice:** GameCI runs an automated Android build job, but if CI cannot produce the APK (e.g. runner memory limits, Docker Android NDK module constraints, or headless licensing limitations), Varun may need to build locally on a workstation with Unity Hub and Android Build Support installed.
-> **Store & Robot policy:** Never publish to app stores; never connect to or command a real robot from automated agent scripts.
+CI job `build-android` in `.github/workflows/unity-tests.yml` runs that same method through `game-ci/unity-builder` (Android ARM64 IL2CPP, image `unityci/editor:ubuntu-6000.5.2f1-android-3`). The job generates a debug keystore (`ci/debug.keystore`, alias `androiddebugkey`, the public Android debug passwords) and the build method refuses to continue in batch mode without it. That file is gitignored and is not a release key. Release signing is OHH-232. The job prints the APK size in the step summary and uploads artifact `OhhO-VR-<git sha>.apk`. The editor menu still builds when the debug keystore is absent and leaves signing unchanged.
+
+**Human TODO:** sideload `OhhO-VR-<sha>.apk` onto a Quest once. CI does not install the headset build.
+
+Tagged sideload builds (GitHub Release APK, SideQuest listing draft, and install steps) are in [docs/distribution/sideload.md](docs/distribution/sideload.md). Horizon Store readiness is in [docs/distribution/horizon-store-checklist.md](docs/distribution/horizon-store-checklist.md).
+
+> **Local build notice:** GameCI runs an automated Android build job. If CI cannot produce the APK, build locally on a workstation with Unity Hub and Android Build Support installed.
+> **Store and robot policy:** Do not publish to app stores. Do not connect to or command a real robot from automated agent scripts.
 
 > **Rebuilding the UI:** the whole screen is generated by an editor script.
 > If you ever need to regenerate it (or after pulling UI-breaking changes):
@@ -90,9 +93,11 @@ visionOS support is planned but not yet implemented. Architecture notes:
 
 ## 4. Edit-mode tests
 
-The NUnit fixtures are in `Assets/Scripts/Editor/Tests/` (60 tests in namespace `OmniBot.VR.Tests`, covering control scheme factory, drive spec parsing, Fabrik IK solver, calibration persistence, and teleop deadman/e-stop safety paths). Run them locally in batch mode or via the Unity Test Runner.
+The NUnit fixtures are in `Assets/Scripts/Editor/Tests/` (namespace `OmniBot.VR.Tests`). Of the earlier fixtures, 39 are 13 drive-spec, 11 control-scheme factory, 9 calibration, and 6 Fabrik IK. The teleop fixtures cover the deadman (on by default), latched e-stop (both grips, A+B, and the HUD button; clear takes Reset plus a deadman release and re-press), and the OmniBot hard caps (0.2 m/s and 1.0 rad/s after calibration and turbo). Turbo is disabled on a real robot. Main also has the latency-budget fixtures, which run without Unity, plus the sim-screen fixtures, the operator-rules acknowledgement fixtures, and the session-picker fixtures. Feature fixtures under `Assets/Scripts/Detection/Editor/` and `Assets/Scripts/AR/Editor/` use that same namespace and the same `OmniBot.VR.Tests` filter. CI skips the Unity steps until the Unity licence secrets are set. Run the Unity suite locally in batch mode.
 
-CI runs these edit-mode tests with GameCI (`.github/workflows/unity-tests.yml`) using three repository secrets configured at Settings → Secrets and variables → Actions (https://github.com/ohho-robotics/OhhO-VR/settings/secrets/actions): `UNITY_LICENSE` (the full contents of a Unity personal licence `.ulf` file, e.g. `C:\ProgramData\Unity\Unity_lic.ulf` on Windows), `UNITY_EMAIL` and `UNITY_PASSWORD` (the Unity ID account that owns that licence). If any of these secrets are missing, the workflow fails clearly with an error message instructing the maintainer to set the credentials.
+CI runs these edit-mode tests with GameCI (`.github/workflows/unity-tests.yml`) once three repository secrets are set at Settings → Secrets and variables → Actions (https://github.com/ohho-robotics/OhhO-VR/settings/secrets/actions): `UNITY_LICENSE` (the full contents of a Unity personal licence `.ulf` file, e.g. `C:\ProgramData\Unity\Unity_lic.ulf` on Windows), `UNITY_EMAIL` and `UNITY_PASSWORD` (the Unity ID account that owns that licence). Until they are set the workflow skips the Unity steps and passes. When the secrets are set, `scripts/check-editmode-results.py` reads `test-results/editmode-results.xml` (artifact name `editmode-test-results`) and fails the job if that file is missing or reports zero executed tests (passed + failed + inconclusive = 0). The counts are written to the job summary.
+
+Confirmed from the latest green run before this gate, [Unity tests run 38548684961](https://github.com/ohho-robotics/OhhO-VR/actions/runs/38548684961) (pull request 6, commit `458d2a8`, 14 Oct 2026): GameCI's Test Results check parsed `editmode-results.xml` as **53 passed / 53 total** in 0.211s. That checkout added teleop fixtures on top of the 39 tests above. The artifact zip itself is not anonymously downloadable; the check is produced from that XML. A green run of the fixtures in this checkout must show an executed count greater than zero. `OmniBot.VR.Tests` in this checkout includes the teleop deadman and e-stop fixtures, the 39 drive, scheme, calibration, and IK fixtures, the latency-budget fixtures, the sim-screen fixtures, the operator-rules acknowledgement fixtures, the session-picker fixtures, and the Detection, AR, AprilTag, telemetry, SLAM, signaling, sim-link, and twin fixtures when the runner discovers them (273 `[Test]` or `[UnityTest]` methods outside `Assets/Tests/PlayMode` on main before these teleop, latency-budget, and sim-screen fixtures, plus 2 play-mode methods).
 
 Windows:
 
@@ -106,6 +111,13 @@ Linux:
 unity -batchmode -nographics -projectPath <clone> -runTests -testPlatform editmode -testFilter OmniBot.VR.Tests -testResults <xml> -logFile <log>
 ```
 
+Latency budgets and the empty results template are in `docs/LATENCY_BUDGETS.md`. The fake-link fixtures do not need a Quest or a robot:
+
+```
+dotnet test tests/LatencyHarness.Tests/LatencyHarness.Tests.csproj
+python -m unittest discover -s scripts -p "test_*.py"
+```
+
 ---
 
 ## 5. Setup: Sign In & Connect
@@ -113,17 +125,54 @@ unity -batchmode -nographics -projectPath <clone> -runTests -testPlatform editmo
 1. Put on the headset and launch the app.
 2. The **OhhO Screen** appears in front of you with the **Login** page.
 3. Enter the same email you use on ohho-robotics.com → **Send Code** → type
-   the 6-digit code from your email → **Verify**.
-4. The **Console** shows your VR products (today: **OhhO Pilot**). Open it.
-5. The **Garage** lists the robots saved to your account — the same list as
-   the website and Android app. Empty? Add a robot on ohho-robotics.com
-   (or the app) — it appears here automatically. The header's **Open Website**
-   button launches the site in the Quest browser.
-6. **Pick a robot** → the **Teleop** page opens. Enter the robot's IP
-   (default `192.168.1.101`) and port (default `9090`) → **Connect**.
-   The status dot turns green when connected.
+   the 6-digit code from your email → **Verify**. The Google button does not
+   complete Google sign-in: `LoginPanelController.OnGoogleSignIn` skips to the
+   garage with no token. Use the email code.
+4. The **Console** shows VR products from `{site}/vr/manifest.json` (today the
+   manifest is written for **OhhO Pilot**). Open it.
+5. The **Garage** reads `user_robots` for that Supabase account
+   (`GarageClient`). Empty means the account has no rows or the read failed.
+   Add a robot on ohho-robotics.com and open the garage again. **Open Website**
+   launches the site in the Quest browser.
+6. **Pick a robot** → choose **Simulate** or **Drive real**.
+   - **Simulate → Local desktop** uses the IP and port already filled in
+     (default `192.168.1.101`, port `9090`) and opens Teleop. Registry sessions
+     appear as extra buttons below it. From the garage that is three clicks:
+     the robot, Simulate, Local desktop.
+   - **Cloud** starts a session when an orchestrator is configured, or attaches to
+     a `wss://` rosbridge URL.
+   - **In-headset** is an offline demo. It does not open a socket.
+   - **Drive real** shows a safety notice, and a deadman tutorial the first time,
+     before an announced robot or a manual IP. The deadman stays on for a real robot.
+   The Teleop status dot turns green when a network session connects. A blue **SIM**
+   or orange **REAL** banner stays on the teleop, camera, and controls pages.
+   See [docs/user-guide.md](docs/user-guide.md).
 
-Connect expects a robot that is **not in this repository**. The headset opens a ROSBridge WebSocket (default port `9090`). Recording export expects an HTTP bridge on port `8765`. The camera view expects MJPEG from `web_video_server` on port `8080`. Those processes live on the robot PC. This repo does not ship them.
+Connect expects a robot that is **not in this repository**. The headset opens a ROSBridge WebSocket (default port `9090`). Recording export expects an HTTP bridge on port `8765`. The camera view tries WebRTC first: with PlayerPrefs `ohho.webrtc.token` it opens `wss://<robot>:8443/webrtc/signaling`, and without a token it opens `ws://<robot>:8766/signaling`. MJPEG from `web_video_server` on port `8080` is the fallback. An explicit socket can be set in `ohho.webrtc.url`. Those processes live on the robot PC. This repo does not ship them.
+
+### In-headset sim (no robot PC)
+
+`RobotLinkFactory.Select(RobotLinkTarget.InHeadset)` returns a `SimulatedRobotLink`. It never opens a socket. The base follows the website deadman rule (`lib/connect/teleop.ts`): motion is commanded only while the deadman is held, and releasing it sends zero. E-stop latches zero until it is cleared. Each linear axis is capped at 0.2 m/s and yaw at 1 rad/s (`RobotConfig`). Arm joints slew at that same 1 rad/s and stay inside their position limits. Odometry, joint states, IMU, and `/sim/telemetry` are marked `kind=sim`.
+
+Shared numeric vectors live in `Assets/Scripts/Control/Simulated/SimulatedModel.cs` (`SimulatedVectors`): the teleop deadman sample `{0.2, 0.05, -0.4}`, keyboard scales 0.2 m/s and 0.8 rad/s, battery 0.87, and the 100 ms holonomic step from `lib/connect/simulated.ts`.
+
+OHH-212 session picker hookup, one line:
+
+```
+link = RobotLinkFactory.Select(RobotLinkTarget.InHeadset);
+```
+
+Assigning an `InHeadsetSimHost` to `TeleopController.linkProvider` is the same choice. That host ticks the sim. Deadman is the left index trigger, or Space in Play Mode, so the grip buttons stay turbo and e-stop. Until the OHH-211 Unity twin (`OmniBot.VR.Twin`) is in the project, the host builds a 4 m placeholder room instead of the twin mesh.
+
+A **Simulate** session opens the chase camera (`/sim/chase_cam/image_raw`) on a curved world-space screen. A strip switches chase, front, wrist, and BEV, and the wrist camera stays in a picture-in-picture until it is the main view. Drag the screen and resize it with the handle; the pose and size are remembered. JPEG decode runs off the main thread, display is capped at 30 fps, and the overlay shows fps and frame age. The stream URL asks `web_video_server` for `quality` and `width` (main 80 / 960, wrist inset 60 / 320). A real session keeps the profile camera order on the flat panel and still decodes off the main thread. BEV stays in that order when the profile lists `/camera/base/bev/image_raw` (OmniBot does).
+
+The same BEV topic is drawn as a floor quad under the tabletop twin. If the scene has an object named `OmniBotTwin`, or a component named `TwinView`, the quad parents to it, a few millimetres below the origin, in the twin's scale. Otherwise it sits at desk height (0.72 m) in front of the headset at the 0.25 tabletop scale. The quad is created when teleop starts. It is not a child of the OhhO screen, so hiding the screen does not hide it.
+
+In a sim session the picture is the synthetic top-down camera (2.2 m above `base_link`, 120° horizontal field of view, 960×540) that publishes `/camera/base/bev/image_raw`. On a real robot the same topic is the stitcher output, a square covering ±2 m around the base. The floor stream asks for quality 70 and width 640. Image up is robot forward.
+
+No 2D detector topic is available to draw on the front camera. OmniBot does not publish `vision_msgs/Detection2DArray`. `perception.launch.py` can start `object_perception_node`, which reports metric detections on `/perception/objects`, `/perception/object_info`, `/perception/nearest_distance`, and `/perception/query_result` instead of boxes. The headset leaves the front camera texture unmarked until a `Detection2DArray` topic exists.
+
+Screenshot the floor panel in a sim session and on the real robot. This checkout cannot open Play Mode or a Quest, so those pictures are an operator check.
 
 ---
 
@@ -136,28 +185,46 @@ Connect expects a robot that is **not in this repository**. The headset opens a 
 | Left thumbstick Y | Forward / backward (linear.x) |
 | Left thumbstick X | Strafe left / right (linear.y) |
 | Right thumbstick X | Rotate left / right (angular.z) |
-| Left grip (hold) | Deadman, on by default. Release publishes zero velocity on that same tick. Only a kind=sim session may turn it off; the HUD shows ON or OFF. |
-| Right trigger | Turbo (2×) in a kind=sim session only, clamped to the robot hard cap (OmniBot 0.2 m/s and 1.0 rad/s). Disabled on a real robot. |
-| **A + B, or the HUD e-stop button** | **Emergency stop.** Latches immediately, publishes zero velocity and /emergency_stop. Releasing A+B, the HUD button, or the grips does not clear it. |
-| Left controller X (Reset) | Starts clearing a latched e-stop. Motion stays stopped until the deadman is released and pressed again. Ignored while A+B is still held. |
+| Left grip (hold) | Deadman, on by default. Release publishes zero velocity on that same tick. A real robot cannot turn it off. A kind=sim session in the editor may. The HUD shows ON or OFF. |
+| Right grip (hold) | Not ground turbo and not the ground deadman. On a quadrotor either grip is the deadman, and both grips are e-stop. |
+| Right index trigger | Arm clutch. In a kind=sim session it is also base turbo (2×), then clamped to the robot hard cap (OmniBot 0.2 m/s and 1.0 rad/s). Disabled on a real robot. |
+| **Both grips simultaneously** | Latches emergency stop, publishes `/emergency_stop` true, and publishes zero velocity. Releasing the grips does not clear it. Not a hardware e-stop — [docs/safety.md](docs/safety.md) |
+| **A + B, or the HUD e-stop button** | Latches emergency stop the same way. Releasing A+B or the HUD button does not clear it. |
+| Left controller X (Reset) | Starts clearing a latched e-stop. Motion stays stopped until the deadman is released and pressed again. Ignored while both grips or A+B are still held. The same button also requests arm enable. |
 | Left controller B | Hide / show the OhhO Screen |
-| Right thumbstick press | Cycle camera feed |
+| Right thumbstick press | Cycle camera (a sim session also has a Chase / Front / Wrist / BEV strip) |
 
 ### Hand Tracking Arm Control
 
 | Gesture | Action |
 |---|---|
-| Right hand position (in workspace) | IK target for arm end-effector |
+| Right index trigger (hold) | Arm clutch — the arm moves only while this is held |
+| Right hand position (in workspace, clutch held, tracking good) | IK target, as motion relative to the pose where the clutch closed |
 | Right hand rotation | Wrist orientation target |
 | Right index–thumb pinch | Gripper close (pinch=1 → closed, pinch=0 → open) |
-| Left hand thumbs-up (hold 0.5 s) | Toggle arm enable/disable |
+| Left controller X | Arm enable. On a real robot, press again to confirm. Press while armed to turn off |
+| Left hand thumbs-up (hold 0.5 s) | Request arm enable, or turn it off. Does not confirm a real robot |
+| Right stick Y while clutch held and hand tracking is poor | Jog the selected joint |
+| Left stick click | Next jog joint |
 
 ---
 
 ## 7. Hand Tracking Arm Workspace
 
 The arm workspace maps the right hand's position within a 0.40 m radius sphere
-(centered on `handWorkspaceOrigin`) to the SO-101 arm's reachable space.
+(centered on `handWorkspaceOrigin`) to the SO-101 arm's reachable space. A wire
+sphere is drawn on that origin while teleop is running.
+
+Enabling the arm does not move it. Motion starts when the right index trigger
+closes, from the pose the arm already holds. A simulated garage robot enables
+on one request. Any other status, including a live robot, waits for a second
+Left X press before `/arm/enable` is published. Joint commands step at most
+0.15 rad, the same cap as the robot's arm safety node.
+
+SO-101 link lengths and kinematic zeros come from `RobotDescriptor`. Servo
+home ticks are not calibrated in this client (OHH-94). Until that measurement
+lands, joint homes stay at 0 rad. A video of this flow on the physical arm
+is still outstanding — do not treat sim tests as that recording.
 
 ```
               [Headset view — looking down]
@@ -191,7 +258,7 @@ with `_updateRootPose` + `_updateRootScale` + `_applyBoneTranslations` enabled
 (hand mesh exactly follows the tracked wrist — no offset), the hand skinned
 meshes use `updateWhenOffscreen` (prevents per-eye frustum culling that made
 hands vanish in one eye), the tracking origin is **Stage**, and the Android
-manifest requests **HIGH** hand-tracking frequency.
+manifest requests **LOW** hand-tracking frequency (the Meta default; `OculusProjectConfig` matches).
 
 ---
 
@@ -213,7 +280,7 @@ Tweak the values in the inspector on `[OhhO VR App] → VRGraphicsBoost`.
 
 ## 9. Dataset Recording Workflow
 
-1. Open the **Teleop** page (pick a robot in the garage).
+1. Open the **Teleop** page (pick a robot, then Simulate or Drive real).
 2. Press **Start Recording**. The status shows the episode name + live timer.
 3. Perform the demonstration — all arm states, odometry, and commands are
    captured at 30 Hz locally on the headset.
@@ -227,38 +294,22 @@ After recording, export episodes to the robot for training:
 
 1. Ensure the robot VR bridge is running (see section 10).
 2. Press **Export to Robot** in the Teleop page.
-3. Each JSONL file is uploaded via HTTP POST to `http://<robotIp>:8765/upload_episode`.
-4. Files are saved to `~/datasets/vr_episodes/` on the robot PC.
+3. Each JSONL file is POSTed to `http://<robotIp>:8765/upload_episode` (multipart field `file`).
+4. No handler for that path is in this repo. A search of OmniBot `ohh-205-wsl2-network` did not find one either. Foxglove on port 8765 is a different service. Expect export to fail; the JSONL stays on the headset.
 
 ---
 
-## 10. Robot-side bridge (not in this repo)
+## 10. Recording signals the headset sends
 
-Export and recording signals expect an HTTP service on the robot PC, port `8765`. That service is not in this checkout. When a bridge is running there, the headset uses:
-- `GET  http://<robot>:8765/health` — health check
-- `POST http://<robot>:8765/upload_episode` — multipart form upload (field: `file`)
+`EpisodeManager` publishes `/vr/record_start` (`std_msgs/String`, the episode name) and `/vr/record_stop` (`std_msgs/Bool`, true = save, false = discard). No subscriber for those topics is in this repo.
 
-The same robot-side service is expected to map the headset's recording signals onto a recorder node:
-- `/vr/record_start` (`std_msgs/String`) — episode name → start recording
-- `/vr/record_stop` (`std_msgs/Bool`) — `true` = save, `false` = discard
-
-and mirrors `/arm/joint_states`, `/odom`, and `/cmd_vel/teleop` to `/vr/obs`
-(JSON string) for any external VR monitoring tools.
+Export POSTs the JSONL to `http://<robot>:8765/upload_episode`. The headset does not call `/health`. No upload route was found in this repo or in OmniBot `ohh-205-wsl2-network`. Foxglove's bridge on port 8765 is a WebSocket and does not accept that POST. A `/vr/obs` mirror is not implemented here.
 
 ---
 
-## 11. Apple Vision Pro Roadmap
+## 11. Not in this commit
 
-The visionOS port is planned for a future release. Key design decisions:
-
-- **No ROS changes required.** The ROSBridge WebSocket protocol and all
-  published/subscribed topics are identical.
-- **Separate Swift app** using `URLSessionWebSocketTask` for ROSBridge,
-  ARKit `HandAnchor` for hand tracking, and RealityKit for scene rendering.
-- The `ArmIKSolver` CCD algorithm ports 1:1 to Swift (`simd` math library).
-- Hand gesture detection (`GestureDetector`) maps to ARKit skeleton joints.
-- Timeline: dependent on Apple shipping `HandAnchor` API stability in
-  visionOS 2.x and RealityKit spatial computing API maturity.
+Cloud sim ([OHH-216](https://linear.app/ohho-robotics/issue/OHH-216)), AprilTag tracking ([OHH-213](https://linear.app/ohho-robotics/issue/OHH-213)), and a grip-deadman drive loop (`ohh-59-gameci-quest-teleop`) are not in this tree. WebRTC remains roadmap. visionOS is not started. Details and the files those claims rest on are in [docs/user-guide.md](docs/user-guide.md) and [docs/safety.md](docs/safety.md).
 
 ---
 
@@ -269,7 +320,7 @@ The visionOS port is planned for a future release. Key design decisions:
 ├── Assets/
 │   ├── scene1.unity            # the only enabled build scene
 │   ├── Scripts/
-│   │   ├── App/OhhoVrApp.cs    # login→console→garage→teleop routing (singleton)
+│   │   ├── App/OhhoVrApp.cs    # login→console→garage→session→teleop routing
 │   │   ├── Core/
 │   │   │   ├── Messages/       # ROSBridge JSON message types
 │   │   │   ├── Platform/       # manifest/catalog/Supabase/garage clients
@@ -277,7 +328,10 @@ The visionOS port is planned for a future release. Key design decisions:
 │   │   │   ├── ConnectionManager.cs # Connection lifecycle (singleton)
 │   │   │   ├── VRGraphicsBoost.cs   # 1.5× resolution + MSAA + FFR + 90 Hz
 │   │   │   └── RobotConfig.cs      # All constants
-│   │   ├── Control/            # RobotProfile, TeleopController, drive/manip schemes
+│   │   ├── AR/                 # 1:1 twin overlay, robot-anchored HUD, manual placement
+│   │   ├── Control/            # RobotProfile, TeleopController, drive/manip schemes, session targets
+│   │   ├── Latency/            # latency budgets and the measurement log
+│   │   ├── Detection/          # AprilTag robot pose (see Assets/Scripts/AR/HOOKUP.md)
 │   │   ├── Input/
 │   │   │   ├── ArmIKSolver.cs      # CCD IK solver (pure C#)
 │   │   │   ├── GestureDetector.cs  # OVR hand tracking
@@ -290,14 +344,17 @@ The visionOS port is planned for a future release. Key design decisions:
 │   │   │   ├── Auth/LoginPanelController.cs
 │   │   │   ├── Console/ConsolePanelController.cs
 │   │   │   ├── Garage/GaragePanelController.cs
+│   │   │   ├── Session/SessionPickerPanel.cs # Simulate / Drive real, then a target
 │   │   │   ├── TeleopHudController.cs # connection+telemetry+camera+recording+export
 │   │   │   └── ...
-│   │   ├── Video/              # MJPEG camera feed; WebRTC source is roadmap
+│   │   ├── Video/              # WebRTC receive (ohho_webrtc) with MJPEG fallback; sim screen is a curved chase cam with off-thread decode
 │   │   └── Recording/          # EpisodeManager, ProfileDrivenRecorder
 │   └── Editor/
 │       └── OhhoUnifiedAppBuilder.cs  # OmniBot → Rebuild Unified OhhO Screen
 ├── Packages/manifest.json
-└── ProjectSettings/ProjectVersion.txt
+├── ProjectSettings/ProjectVersion.txt
+├── docs/distribution/        # sideload guide, store checklist, privacy draft
+└── scripts/bump-quest-version.py
 ```
 
 ---
@@ -306,17 +363,60 @@ The visionOS port is planned for a future release. Key design decisions:
 
 | Problem | Solution |
 |---|---|
-| Status indicator stays red | Check robot IP, verify ROSBridge is running on port 9090, check `ROS_DOMAIN_ID=30` |
-| Hand tracking not working | Ensure Hand Tracking is enabled in Quest developer settings and in XR Plug-in Management; the manifest already requests the `HAND_TRACKING` permission (HIGH frequency) |
+| Status indicator stays red | Check the IP and that rosbridge is listening on port 9090 on `0.0.0.0`, not only `127.0.0.1`. The headset uses a WebSocket, not DDS. `ROS_DOMAIN_ID=30` is the sim/compose setting so Gazebo and rosbridge share a graph |
+| Hand tracking not working | Ensure Hand Tracking is enabled in Quest developer settings and in XR Plug-in Management; the manifest already requests the `HAND_TRACKING` permission (LOW frequency) |
 | Hand mesh offset from real hand | The hand prefabs update root pose, scale, and bone translations; if it regresses, re-run **OmniBot → Rebuild Unified OhhO Screen** |
 | Hand visible in one eye only | The hand meshes use `updateWhenOffscreen` so per-eye frustum culling can't drop them |
 | Camera feed shows "No Signal" | Ensure `web_video_server` is running: `ros2 run web_video_server web_video_server` |
-| Export fails | Check that an HTTP service answers on `http://<robot>:8765/health` and that the firewall allows port 8765; the bridge is not in this repo |
-| Arm not moving | Toggle arm enable with left-hand thumbs-up, check `/arm/enable` topic |
+| Export fails | Check that an HTTP service answers on `http://<robot>:8765/health` and that the firewall allows port 8765; the bridge is not in this repo. Until something serves `POST /upload_episode` on port 8765, the JSONL stays under `persistentDataPath/recordings/` on the headset. Foxglove on 8765 will not accept the upload |
+| Arm not moving | Request enable with Left X or a thumbs-up. On a real robot press Left X again to confirm, then hold the right index trigger. The arm will not jump to the hand on enable. Nothing is published on `/arm/enable` before that confirm |
 | UI looks low-res | `VRGraphicsBoost` sets 1.5× eye resolution at startup; check it exists on `[OhhO VR App]` |
 | Text renders magenta | The TMP font materials use `TextMeshPro/Distance Field`; if they regress, re-assign `TextMeshPro/Distance Field` to the LiberationSans SDF materials |
 
 ---
+
+## 14. Safety case
+
+Driving a real robot from this client needs the written case, not only the controls table above.
+
+- [docs/safety-case.md](docs/safety-case.md) — FMEA of the headset-to-robot path, with each control tied to a file and a test, or marked pending
+- [docs/operator-rules.md](docs/operator-rules.md) — hardware e-stop, line of sight, speed cap, area clearance, Varun present (rules version 1)
+- [docs/release-signoff-checklist.md](docs/release-signoff-checklist.md) — release gate. It is unsigned.
+
+`RealSessionGate.TryBegin(SessionTarget.Real)` blocks a real session until rules version 1 is accepted. Sim sessions are not blocked. The garage pick path does not yet know which target it is starting, so the app does not call the gate. The TODO is on `RealSessionGate`.
+
+---
+
+## Demo clip
+
+The 30–60 second Quest passthrough clip (driving OmniBot and moving the arm) is **pending**. There is no video URL until that file is on YouTube.
+
+Shot list, Meta Quest Developer Hub / `adb` / scrcpy capture, captions, and the upload checklist: [docs/recording/quest-teleop-clip.md](docs/recording/quest-teleop-clip.md).
+
+**Needs Varun: Quest + robot, record and upload.**
+
+---
+
+## 14. AR mode
+
+AR mode draws a 1:1 twin on the detected robot and a HUD that stays on that robot. The HUD shows joint angles, planar speed, yaw rate, and tag confidence. When detection is not locked, `PlaceInFrontOf` or `PlaceManually` places the twin. The overlay only subscribes; it does not publish teleop commands. It is not in `Assets/scene1.unity`. Hookup is `Assets/Scripts/AR/HOOKUP.md`.
+
+---
+
+## Coordinated release (not yet tagged)
+
+Nothing in this section is a published release. Git tags, GitHub Releases, and the sim container tag below have not been created. `ProjectSettings/ProjectSettings.asset` on this commit (`4ebc555a7495ee7a2cd0f62cbe85fbc201ad1d4b`, `origin/main`) still has `bundleVersion: 1.0`.
+
+| Piece | Intended pin | On this commit? |
+|---|---|---|
+| OhhO-VR app | git tag `v1.0.0` | The Quest client is here. The tag is not yet tagged. |
+| `protocolVersion` | `1.0.0` | No. See the matrix. |
+| `ohho.telemetry.v1` | schema `1.0.0` | No. |
+| `RobotDescriptor` | `ohho.descriptor.v1` (`1.0.x`) | No. |
+| OmniBot VR profile | git tag `vr-profile-v1.0.0` | No. That tag is not yet tagged. |
+| Sim container | `ghcr.io/ohho-robotics/omnibot-sim:vr-1.0.0` | Placeholder. Not published. |
+
+Full table, branch SHAs, and the human tag commands: [docs/compatibility-matrix.md](docs/compatibility-matrix.md), [CHANGELOG.md](CHANGELOG.md), [docs/release-tags.md](docs/release-tags.md). `scripts/print-release-commands.sh` prints those commands and does not run them.
 
 ## Licence
 

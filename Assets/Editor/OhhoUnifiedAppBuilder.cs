@@ -13,6 +13,7 @@ using OmniBot.VR.UI;
 using OmniBot.VR.UI.Auth;
 using OmniBot.VR.UI.Console;
 using OmniBot.VR.UI.Garage;
+using OmniBot.VR.UI.Session;
 using OmniBot.VR.UI.Teleop;
 using OmniBot.VR.Video;
 
@@ -337,8 +338,10 @@ namespace OmniBot.VR.Editor
             var login = BuildLoginPage(authScreen.transform);
             var console = BuildConsolePage(authScreen.transform);
             var garage = BuildGaragePage(authScreen.transform);
+            var session = BuildSessionPage(authScreen.transform);
             console.SetActive(false);
             garage.SetActive(false);
+            session.SetActive(false);
 
             var teleop = BuildTeleopPage(teleopScreen.transform);
             teleop.SetActive(false);
@@ -390,13 +393,14 @@ namespace OmniBot.VR.Editor
                 "• Left Joystick: Move Forward/Back/Strafe\n" +
                 "• Right Joystick: Turn (Yaw)\n" +
                 "• Left grip: deadman (required; release stops the base)\n" +
-                "• Right trigger: turbo in sim only (OmniBot clamped to 0.2 m/s; off on a real robot)\n\n" +
+                "• Right trigger: arm clutch, and turbo in sim only (OmniBot clamped to 0.2 m/s and 1.0 rad/s; turbo off on a real robot)\n\n" +
                 "<b>ROBOT ARM</b>\n" +
                 "• Right Hand: Move physical hand to move gripper\n" +
                 "• Right Pinch: Open/Close Gripper\n" +
-                "• Left Thumbs-Up (Hold 0.5s): Enable/Clutch Arm\n\n" +
+                "• Right index trigger: clutch. REAL arm needs Left X twice\n" +
+                "• Left Thumbs-Up (Hold 0.5s): request enable (does not confirm a real robot)\n\n" +
                 "<b>SAFETY</b>\n" +
-                "• A+B or the HUD e-stop: latched emergency stop\n" +
+                "• Both grips, A+B, or the HUD e-stop: latched emergency stop\n" +
                 "• Releasing the buttons or grips does not clear it\n" +
                 "• Reset (left X), then release and re-press the left grip\n\n" +
                 "<b>DATASET RECORDING</b>\n" +
@@ -562,10 +566,30 @@ namespace OmniBot.VR.Editor
             return page;
         }
 
+        // ── Session picker (garage → simulate / drive real → teleop) ─────────
+        private static GameObject BuildSessionPage(Transform parent)
+        {
+            var page = MakePage("Session Page", parent);
+            if (page.GetComponent<SessionPickerPanel>() == null)
+                page.AddComponent<SessionPickerPanel>();
+            return page;
+        }
+
         // ── Teleop ────────────────────────────────────────────────────────────
         private static GameObject BuildTeleopPage(Transform parent)
         {
             var page = MakePage("Teleop Page", parent);
+
+            var safetyBanner = MakePanel("Safety Banner", page.transform, new Color(0.12f, 0.14f, 0.2f, 0.94f));
+            Place(safetyBanner.GetComponent<RectTransform>(), new Vector2(0.5f, 1f), new Vector2(980f, 88f), new Vector2(0f, -12f));
+            var safetyStatus = MakeText("Safety Status", safetyBanner.transform, "SAFETY — waiting for /ohho/safety/state", 28, TextMain, TextAlignmentOptions.MidlineLeft);
+            safetyStatus.fontStyle = FontStyles.Bold;
+            Place(safetyStatus.rectTransform, new Vector2(0f, 0.5f), new Vector2(520f, 64f), new Vector2(20f, -32f));
+            var estopReset = MakeButton("E-Stop Reset", safetyBanner.transform, "Reset e-stop", 22, Danger, TextMain);
+            Place(estopReset.GetComponent<RectTransform>(), new Vector2(1f, 0.5f), new Vector2(220f, 56f), new Vector2(-250f, 0f));
+            var estopConfirm = MakeButton("E-Stop Confirm", safetyBanner.transform, "Confirm reset", 22, new Color(0.95f, 0.85f, 0.2f), Color.black);
+            Place(estopConfirm.GetComponent<RectTransform>(), new Vector2(1f, 0.5f), new Vector2(220f, 56f), new Vector2(-16f, 0f));
+            estopConfirm.gameObject.SetActive(false);
 
             // ── Left column: robot + connection + telemetry ──
             var left = MakePanel("Left Column", page.transform, new Color(0, 0, 0, 0));
@@ -603,6 +627,15 @@ namespace OmniBot.VR.Editor
             Place(arm.rectTransform, new Vector2(0, 1), new Vector2(480, 30), new Vector2(20, -480));
             var mode = MakeText("Mode Text", left.transform, "mode: —", 22, TextMain, TextAlignmentOptions.MidlineLeft);
             Place(mode.rectTransform, new Vector2(0, 1), new Vector2(480, 30), new Vector2(20, -520));
+
+            var telemetryPanel = MakePanel("Telemetry V2", page.transform, new Color(0.04f, 0.06f, 0.10f, 0.94f));
+            Place(telemetryPanel.GetComponent<RectTransform>(), new Vector2(0.5f, 0.5f), new Vector2(680, 860), new Vector2(40, 0));
+            var telemetryBody = MakeText("Telemetry Body", telemetryPanel.transform, "telemetry", 16, TextMain, TextAlignmentOptions.TopLeft);
+            telemetryBody.richText = true;
+            telemetryBody.enableWordWrapping = true;
+            Place(telemetryBody.rectTransform, new Vector2(0, 0), new Vector2(650, 760), new Vector2(14, 16));
+            var telemetryMode = MakeButton("Telemetry Mode", telemetryPanel.transform, "Expanded", 20, Cyan, Color.black);
+            Place(telemetryMode.GetComponent<RectTransform>(), new Vector2(1, 1), new Vector2(180, 44), new Vector2(-12, -12));
 
             var hints = MakeText("Hints Text", left.transform, "", 19, TextMut, TextAlignmentOptions.TopLeft);
             hints.enableWordWrapping = true;
@@ -654,6 +687,9 @@ namespace OmniBot.VR.Editor
             hso.FindProperty("velocityText").objectReferenceValue = vel;
             hso.FindProperty("armText").objectReferenceValue = arm;
             hso.FindProperty("modeText").objectReferenceValue = mode;
+            hso.FindProperty("telemetryBody").objectReferenceValue = telemetryBody;
+            hso.FindProperty("telemetryModeButton").objectReferenceValue = telemetryMode;
+            hso.FindProperty("telemetryModeLabel").objectReferenceValue = telemetryMode.GetComponentInChildren<TMP_Text>();
 
             hso.FindProperty("startRecordingButton").objectReferenceValue = startRec;
             hso.FindProperty("stopSaveButton").objectReferenceValue = stopSave;
@@ -665,6 +701,10 @@ namespace OmniBot.VR.Editor
             hso.FindProperty("robotNameText").objectReferenceValue = robotName;
             hso.FindProperty("hintsText").objectReferenceValue = hints;
             hso.FindProperty("backButton").objectReferenceValue = back;
+            hso.FindProperty("safetyBanner").objectReferenceValue = safetyBanner.GetComponent<Image>();
+            hso.FindProperty("safetyStatusText").objectReferenceValue = safetyStatus;
+            hso.FindProperty("estopResetButton").objectReferenceValue = estopReset;
+            hso.FindProperty("estopConfirmButton").objectReferenceValue = estopConfirm;
             hso.ApplyModifiedPropertiesWithoutUndo();
             return page;
         }
@@ -677,6 +717,7 @@ namespace OmniBot.VR.Editor
             var bootstrap = GameObject.Find("[OhhO VR App]");
             if (bootstrap == null) return;
 
+            // Live input and recording only. Do not attach archived publishers from Archive/legacy-control.
             if (bootstrap.GetComponent<GestureDetector>() == null) bootstrap.AddComponent<GestureDetector>();
             if (bootstrap.GetComponent<ProfileDrivenRecorder>() == null) bootstrap.AddComponent<ProfileDrivenRecorder>();
             if (bootstrap.GetComponent<VRGraphicsBoost>() == null) bootstrap.AddComponent<VRGraphicsBoost>();
@@ -691,6 +732,7 @@ namespace OmniBot.VR.Editor
             var login = authScreen.transform.Find("Login Page")?.gameObject;
             var console = authScreen.transform.Find("Console Page")?.gameObject;
             var garage = authScreen.transform.Find("Garage Page")?.gameObject;
+            var session = authScreen.transform.Find("Session Page")?.gameObject;
             
             var teleop = teleopScreen.transform.Find("Teleop Page")?.gameObject;
             var cameraPage = cameraScreen.transform.Find("Camera Page")?.gameObject;
@@ -710,6 +752,8 @@ namespace OmniBot.VR.Editor
             appSo.FindProperty("loginPanel").objectReferenceValue = login;
             appSo.FindProperty("consolePanel").objectReferenceValue = console;
             appSo.FindProperty("garagePanel").objectReferenceValue = garage;
+            var sessionProp = appSo.FindProperty("sessionPickerPanel");
+            if (sessionProp != null) sessionProp.objectReferenceValue = session;
             appSo.FindProperty("teleopPanel").objectReferenceValue = teleop;
             
             var camProp = appSo.FindProperty("cameraPanel");
