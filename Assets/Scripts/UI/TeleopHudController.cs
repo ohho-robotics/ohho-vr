@@ -9,6 +9,7 @@ using OmniBot.VR.Control;
 using OmniBot.VR.Core;
 using OmniBot.VR.Recording;
 using OmniBot.VR.Telemetry;
+using OmniBot.VR.UI.Operate;
 
 namespace OmniBot.VR.UI
 {
@@ -544,17 +545,45 @@ namespace OmniBot.VR.UI
             return true;
         }
 
+        private RectTransform OperateTelemetryColumn()
+        {
+            var dash = GetComponent<OperateDashboard>();
+            if (dash == null) return null;
+            return dash.transform.Find("Telemetry Column") as RectTransform;
+        }
+
+        private static void FitColumnChild(RectTransform rt, float preferredHeight)
+        {
+            rt.anchorMin = new Vector2(0f, 1f);
+            rt.anchorMax = new Vector2(1f, 1f);
+            rt.pivot = new Vector2(0.5f, 1f);
+            rt.sizeDelta = new Vector2(0f, preferredHeight);
+            var le = rt.GetComponent<LayoutElement>();
+            if (le == null) le = rt.gameObject.AddComponent<LayoutElement>();
+            le.preferredHeight = preferredHeight;
+            le.minHeight = preferredHeight;
+            le.flexibleWidth = 1f;
+        }
+
         private void EnsureTelemetryWidgets()
         {
             if (telemetryBody != null) return;
+            var column = OperateTelemetryColumn();
             var panel = new GameObject("Telemetry V2", typeof(RectTransform));
-            panel.transform.SetParent(transform, false);
+            panel.transform.SetParent(column != null ? column : transform, false);
             var panelRt = (RectTransform)panel.transform;
-            panelRt.anchorMin = new Vector2(0.5f, 0.5f);
-            panelRt.anchorMax = new Vector2(0.5f, 0.5f);
-            panelRt.pivot = new Vector2(0.5f, 0.5f);
-            panelRt.sizeDelta = new Vector2(680f, 860f);
-            panelRt.anchoredPosition = new Vector2(40f, 0f);
+            if (column != null)
+            {
+                FitColumnChild(panelRt, 180f);
+            }
+            else
+            {
+                panelRt.anchorMin = new Vector2(0.5f, 0.5f);
+                panelRt.anchorMax = new Vector2(0.5f, 0.5f);
+                panelRt.pivot = new Vector2(0.5f, 0.5f);
+                panelRt.sizeDelta = new Vector2(680f, 860f);
+                panelRt.anchoredPosition = new Vector2(40f, 0f);
+            }
             var bg = panel.AddComponent<Image>();
             bg.color = new Color(0.04f, 0.06f, 0.10f, 0.94f);
 
@@ -815,32 +844,60 @@ namespace OmniBot.VR.UI
             Sprite uiSprite = connectButton != null ? connectButton.GetComponent<Image>()?.sprite : null;
             if (uiSprite == null && connectionDot != null) uiSprite = connectionDot.sprite;
 
+            var column = OperateTelemetryColumn();
             var bannerGo = new GameObject("Safety Banner", typeof(RectTransform));
-            bannerGo.transform.SetParent(transform, false);
-            bannerGo.transform.SetAsLastSibling();
+            bannerGo.transform.SetParent(column != null ? column : transform, false);
             var bannerRt = (RectTransform)bannerGo.transform;
-            bannerRt.anchorMin = new Vector2(0.5f, 1f);
-            bannerRt.anchorMax = new Vector2(0.5f, 1f);
-            bannerRt.pivot = new Vector2(0.5f, 1f);
-            bannerRt.sizeDelta = new Vector2(980f, 88f);
-            bannerRt.anchoredPosition = new Vector2(0f, -12f);
+            if (column != null)
+            {
+                bannerGo.transform.SetAsFirstSibling();
+                FitColumnChild(bannerRt, 132f);
+            }
+            else
+            {
+                bannerGo.transform.SetAsLastSibling();
+                bannerRt.anchorMin = new Vector2(0.5f, 1f);
+                bannerRt.anchorMax = new Vector2(0.5f, 1f);
+                bannerRt.pivot = new Vector2(0.5f, 1f);
+                bannerRt.sizeDelta = new Vector2(980f, 88f);
+                bannerRt.anchoredPosition = new Vector2(0f, -12f);
+            }
             safetyBanner = bannerGo.AddComponent<Image>();
             safetyBanner.sprite = uiSprite;
             safetyBanner.color = SafetyIdleColor;
 
-            safetyStatusText = CreateLabel("Safety Status", bannerGo.transform, font, 28, TextAlignmentOptions.MidlineLeft);
+            safetyStatusText = CreateLabel("Safety Status", bannerGo.transform, font, column != null ? 20 : 28, TextAlignmentOptions.MidlineLeft);
             var statusRt = safetyStatusText.rectTransform;
-            statusRt.anchorMin = new Vector2(0f, 0f);
-            statusRt.anchorMax = new Vector2(0f, 1f);
-            statusRt.pivot = new Vector2(0f, 0.5f);
-            statusRt.sizeDelta = new Vector2(560f, 0f);
-            statusRt.anchoredPosition = new Vector2(20f, 0f);
+            if (column != null)
+            {
+                statusRt.anchorMin = new Vector2(0f, 1f);
+                statusRt.anchorMax = new Vector2(1f, 1f);
+                statusRt.pivot = new Vector2(0.5f, 1f);
+                statusRt.sizeDelta = new Vector2(-16f, 36f);
+                statusRt.anchoredPosition = new Vector2(0f, -6f);
+            }
+            else
+            {
+                statusRt.anchorMin = new Vector2(0f, 0f);
+                statusRt.anchorMax = new Vector2(0f, 1f);
+                statusRt.pivot = new Vector2(0f, 0.5f);
+                statusRt.sizeDelta = new Vector2(560f, 0f);
+                statusRt.anchoredPosition = new Vector2(20f, 0f);
+            }
             safetyStatusText.text = "SAFETY";
 
             estopResetButton = CreateHudButton("E-Stop Reset", bannerGo.transform, font, uiSprite, "Reset e-stop", LatchedColor, out _resetLabel);
-            PlaceHudButton(estopResetButton, new Vector2(-280f, 0f));
             estopConfirmButton = CreateHudButton("E-Stop Confirm", bannerGo.transform, font, uiSprite, "Confirm reset", new Color(0.95f, 0.85f, 0.2f), out _confirmLabel);
-            PlaceHudButton(estopConfirmButton, new Vector2(-40f, 0f));
+            if (column != null)
+            {
+                PlaceOperateSafetyButton(estopResetButton, 0.02f, 0.49f);
+                PlaceOperateSafetyButton(estopConfirmButton, 0.51f, 0.98f);
+            }
+            else
+            {
+                PlaceHudButton(estopResetButton, new Vector2(-280f, 0f));
+                PlaceHudButton(estopConfirmButton, new Vector2(-40f, 0f));
+            }
             if (_confirmLabel != null) _confirmLabel.color = Color.black;
             estopConfirmButton.gameObject.SetActive(false);
         }
@@ -876,6 +933,16 @@ namespace OmniBot.VR.UI
             rt.offsetMax = Vector2.zero;
             labelText.text = label;
             return btn;
+        }
+
+        private static void PlaceOperateSafetyButton(Button button, float xMin, float xMax)
+        {
+            var rt = (RectTransform)button.transform;
+            rt.anchorMin = new Vector2(xMin, 0f);
+            rt.anchorMax = new Vector2(xMax, 0f);
+            rt.pivot = new Vector2(0.5f, 0f);
+            rt.sizeDelta = new Vector2(-8f, 44f);
+            rt.anchoredPosition = new Vector2(0f, 6f);
         }
 
         private static void PlaceHudButton(Button button, Vector2 anchoredPos)

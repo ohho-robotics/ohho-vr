@@ -73,6 +73,7 @@ namespace OmniBot.VR.Tests
         [SetUp]
         public void SetUp()
         {
+            OperateSafetyLatch.Clear();
             _link = new FakeRobotLink();
             _profile = MakeOmniBotProfile();
             _scheme = new MecanumDriveScheme();

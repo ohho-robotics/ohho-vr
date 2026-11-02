@@ -7,6 +7,7 @@ using OmniBot.VR.Policy;
 using OmniBot.VR.UI;
 using LatchedRobotDescriptor = OmniBot.VR.Descriptor.RobotDescriptor;
 using OmniBot.VR.UI.Garage;
+using OmniBot.VR.UI.Operate;
 using OmniBot.VR.UI.Preflight;
 using OmniBot.VR.UI.Session;
 using OmniBot.VR.Control.Preflight;
@@ -201,15 +202,38 @@ namespace OmniBot.VR.App
             EnsurePicker();
             Activate(login: false, console: false, garage: false, teleop: false, session: true);
         }
+
+        /// <summary>
+        /// Open the operate dashboard. The side camera and controls canvases stay
+        /// hidden: their feed and legend live on this one forward screen. Session
+        /// banners still paint, and the centre slot hosts the sim screen.
+        /// </summary>
         public void ShowTeleop()
         {
-            Activate(login: false, console: false, garage: false, teleop: true, camera: true, controls: true);
+            OperateDashboard dash = null;
+            if (teleopPanel != null)
+                dash = OperateDashboard.Ensure(teleopPanel);
+            Activate(login: false, console: false, garage: false, teleop: true, camera: false, controls: false);
+            if (dash != null)
+            {
+                dash.Bind(teleopController);
+                dash.EnterOperation();
+                if (teleopController != null)
+                    teleopController.AttachCameraFeed(dash.SimFeedController);
+                if (ActiveSession.Current != null)
+                    dash.SetRealmLabel(ActiveSession.Current.Kind == SessionKind.Sim ? "sim" : "real");
+            }
             if (ActiveSession.Current != null)
                 PaintSessionBanners(ActiveSession.Current.Kind);
         }
 
         private void Activate(bool login, bool console, bool garage, bool teleop, bool camera = false, bool controls = false, bool session = false)
         {
+            if (!teleop && teleopPanel != null)
+            {
+                var dash = teleopPanel.GetComponent<OperateDashboard>();
+                if (dash != null) dash.ExitOperation();
+            }
             if (loginPanel != null) loginPanel.SetActive(login);
             if (consolePanel != null) consolePanel.SetActive(console);
             if (garagePanel != null) garagePanel.SetActive(garage);

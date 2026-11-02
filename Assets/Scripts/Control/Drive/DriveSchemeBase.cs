@@ -43,12 +43,15 @@ namespace OmniBot.VR.Control.Drive
         protected float NoInputTimer;
         protected float NoInputModeTimer;
         protected bool InTeleopMode;
+        private bool _publishEStopClear;
         private float _prevVx, _prevVy, _prevVz, _prevWz;
 
         public bool IsConfigured => Profile != null;
         public abstract string HudHint { get; }
 
-        /// <summary>True when emergency stop has been activated via both grips or programmatically.</summary>
+        /// <summary>
+        /// True while a both-grips stop or the operate-screen latch is holding the base.
+        /// </summary>
         public bool IsEmergencyStopActive => EmergencyStopActive;
 
         /// <summary>
@@ -115,12 +118,26 @@ namespace OmniBot.VR.Control.Drive
             NoInputTimer = 0f;
             NoInputModeTimer = 0f;
             InTeleopMode = false;
+            _publishEStopClear = false;
             // Null profile keeps the safe default (deadman on). An explicit false
             // only sticks in the editor/simulator.
             RequireDeadman = profile == null || profile.RequireDeadman;
             ActiveLinVelLimit = profile != null ? Mathf.Max(0f, profile.MaxLinVel) : 0f;
             SuppressMotion = false;
             _prevVx = _prevVy = _prevVz = _prevWz = 0f;
+        }
+
+        /// <summary>
+        /// Clear a UI-latched stop after <see cref="OperateSafetyLatch"/> is cleared.
+        /// Refuses while the latch is still set or both grips are held, so reset
+        /// cannot release a stop the operator is still asserting.
+        /// </summary>
+        public void ReleaseUiStop(IRobotLink link, bool gripHeld)
+        {
+            if (OperateSafetyLatch.UiEStopLatched || gripHeld) return;
+            EmergencyStopActive = false;
+            _publishEStopClear = true;
+            PublishEStopClear(link);
         }
 
         /// <summary>
@@ -144,8 +161,12 @@ namespace OmniBot.VR.Control.Drive
         {
             if (!IsConfigured || Profile == null || !link.IsConnected) return;
 
+            if (_publishEStopClear && !OperateSafetyLatch.UiEStopLatched)
+                PublishEStopClear(link);
+
             // ── Emergency stop: both grips latch until an explicit reset ────────
             HandleEmergencyStop(ref input, link);
+            if (HoldUiEStop(link)) return;
             if (EmergencyStopActive)
             {
                 if (IsPublishing && !string.IsNullOrEmpty(Profile.Topics?.CmdVel))
@@ -321,7 +342,8 @@ namespace OmniBot.VR.Control.Drive
                 TriggerEmergencyStop(link);
                 Debug.Log($"[{GetType().Name}] Emergency stop LATCHED. Left X resets it; releasing the grips does not.");
             }
-            else if (input.ResetEmergencyStop && EmergencyStopActive && !input.BothGrips)
+            else if (input.ResetEmergencyStop && EmergencyStopActive && !input.BothGrips
+                     && !OperateSafetyLatch.UiEStopLatched)
             {
                 // Explicit reset only. Grip release is not a reset: one grip is the
                 // deadman and the right grip is also turbo, so clearing on release
@@ -384,6 +406,36 @@ namespace OmniBot.VR.Control.Drive
             if (link == null || string.IsNullOrEmpty(Profile?.Topics?.CmdVel)) return;
             link.Publish(Profile.Topics.CmdVel, ZeroTwist());
             _prevVx = _prevVy = _prevVz = _prevWz = 0f;
+        }
+
+        private bool HoldUiEStop(IRobotLink link)
+        {
+            if (!OperateSafetyLatch.UiEStopLatched) return false;
+            if (!EmergencyStopActive)
+            {
+                EmergencyStopActive = true;
+                if (Profile.Topics != null && !string.IsNullOrEmpty(Profile.Topics.EmergencyStop))
+                    link.Publish(Profile.Topics.EmergencyStop, new BoolMsg(true));
+                if (Profile.Topics != null && !string.IsNullOrEmpty(Profile.Topics.CmdVel))
+                    link.Publish(Profile.Topics.CmdVel, ZeroTwist());
+            }
+            if (IsPublishing && Profile.Topics != null && !string.IsNullOrEmpty(Profile.Topics.CmdVel))
+            {
+                link.Publish(Profile.Topics.CmdVel, ZeroTwist());
+                IsPublishing = false;
+            }
+            return true;
+        }
+
+        private void PublishEStopClear(IRobotLink link)
+        {
+            if (!_publishEStopClear || OperateSafetyLatch.UiEStopLatched) return;
+            if (link == null || !link.IsConnected || Profile?.Topics == null) return;
+            if (!string.IsNullOrEmpty(Profile.Topics.EmergencyStop))
+                link.Publish(Profile.Topics.EmergencyStop, new BoolMsg(false));
+            if (!string.IsNullOrEmpty(Profile.Topics.CmdVel))
+                link.Publish(Profile.Topics.CmdVel, ZeroTwist());
+            _publishEStopClear = false;
         }
 
         protected static float ApplyDeadZone(float value)
