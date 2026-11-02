@@ -131,8 +131,10 @@ namespace OmniBot.VR.Tests
         [Test]
         public void DriveStop_Real_ZerosTwistWithoutNav2()
         {
+            // Deadman defaults on. The grip is what lets the stick enter teleop;
+            // a real stop from teleop still must not hand control_mode to nav2.
             var scheme = ControlSchemeFactory.CreateDriveScheme(DriveProfile(RobotDeployment.Real));
-            var input = new TeleopInput { LeftStick = new UnityEngine.Vector2(0f, 1f), DeltaTime = 0.05f };
+            var input = DrivingStick();
             scheme.Tick(ref input, _link);
             _link.Published.Clear();
             scheme.Stop(_link);
@@ -143,10 +145,14 @@ namespace OmniBot.VR.Tests
         [Test]
         public void DriveStop_Sim_PublishesNav2()
         {
+            // Same driving precondition as the real case. Stop always publishes
+            // a zero twist, then nav2 once the simulator was actually in teleop.
             var scheme = ControlSchemeFactory.CreateDriveScheme(DriveProfile(RobotDeployment.Sim));
-            var input = new TeleopInput { LeftStick = new UnityEngine.Vector2(0f, 1f), DeltaTime = 0.05f };
+            var input = DrivingStick();
             scheme.Tick(ref input, _link);
+            _link.Published.Clear();
             scheme.Stop(_link);
+            Assert.IsTrue(_link.Published.Exists(p => p.topic == "/cmd_vel/teleop"));
             Assert.IsTrue(_link.Published.Exists(p => p.topic == "/control_mode" && p.json.Contains("\"nav2\"")));
         }
 
@@ -440,6 +446,24 @@ waypoints:
         {
             var profile = RobotProfileFactory.FromGarageRobot(Garage("simulated", "real"));
             Assert.AreEqual(RobotDeployment.Real, profile.DeploymentKind);
+        }
+
+        /// <summary>
+        /// Forward stick with the deadman held and e-stop clear. A bare stick
+        /// never enters teleop while the deadman defaults on.
+        /// </summary>
+        private static TeleopInput DrivingStick()
+        {
+            return new TeleopInput
+            {
+                LeftStick = new UnityEngine.Vector2(0f, 1f),
+                LeftGrip = true,
+                RightGrip = false,
+                BothGrips = false,
+                BothGripsPressed = false,
+                ResetEmergencyStop = false,
+                DeltaTime = 0.05f,
+            };
         }
 
         private static RobotProfile DriveProfile(string deployment)
