@@ -8,7 +8,9 @@ using UnityEngine.XR.Management;
 namespace OmniBot.VR.PlayModeTests
 {
     /// <summary>
-    /// Play-mode coverage for login stub → garage → picker → teleop → e-stop.
+    /// Play-mode coverage for login stub → garage → picker → teleop → latched
+    /// e-stop. Grip release does not clear the stop; the harness re-arms with
+    /// left X, then holds the deadman before expecting motion again.
     /// The fixture runs in an empty scene (<see cref="EmptySceneSetup"/>) and
     /// talks to FakeRobotLink, which is compiled into Assembly-CSharp from the
     /// staged Runtime folder. This assembly cannot reference Assembly-CSharp,
@@ -65,10 +67,14 @@ namespace OmniBot.VR.PlayModeTests
             Assert.AreEqual(0, Field<int>(result, "DeadZoneAddedNonZero"), detail);
             Assert.AreEqual(1, Field<int>(result, "EStopTrueCount"), detail);
             Assert.AreEqual(0, Field<int>(result, "NonZeroWhileHeld"), detail);
+            Assert.AreEqual(0, Field<int>(result, "EStopFalseBeforeReset"), detail);
+            Assert.AreEqual(0, Field<int>(result, "NonZeroBeforeReset"), detail);
             Assert.AreEqual(1, Field<int>(result, "EStopFalseCount"), detail);
 
-            Assert.AreEqual(0.2f, Field<float>(result, "ResumeLinearX"), 0.0001f, detail);
-            Assert.AreEqual(0.2f, Field<float>(result, "ResumeLinearY"), 0.0001f, detail);
+            // Full stick on x and y shares one 0.2 m/s speed cap, so each axis is 0.2/√2.
+            float diagonalAxis = 0.2f / (float)Math.Sqrt(2d);
+            Assert.AreEqual(diagonalAxis, Field<float>(result, "ResumeLinearX"), 0.0001f, detail);
+            Assert.AreEqual(diagonalAxis, Field<float>(result, "ResumeLinearY"), 0.0001f, detail);
             Assert.AreEqual(-1.0f, Field<float>(result, "ResumeAngularZ"), 0.0001f, detail);
             Assert.IsTrue(Field<bool>(result, "TeleopModePublished"), detail);
             Assert.AreEqual(0.2f, Field<float>(result, "TurboLinearX"), 0.0001f, detail);

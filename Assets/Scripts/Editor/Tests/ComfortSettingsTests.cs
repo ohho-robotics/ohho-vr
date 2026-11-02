@@ -109,6 +109,7 @@ namespace OmniBot.VR.Tests
                 BothGrips = false,
                 BothGripsPressed = false,
                 BothGripsReleased = true,
+                ResetEmergencyStop = true,
                 DeltaTime = 0.016f,
             };
 
@@ -118,6 +119,7 @@ namespace OmniBot.VR.Tests
             Assert.AreEqual(input.LeftGrip, same.LeftGrip);
             Assert.AreEqual(input.RightGrip, same.RightGrip);
             Assert.AreEqual(input.BothGripsReleased, same.BothGripsReleased);
+            Assert.IsTrue(same.ResetEmergencyStop);
 
             var mapped = ComfortControlMapping.Apply(input, leftHanded: true);
             Assert.AreEqual(input.RightStick, mapped.LeftStick);
@@ -127,6 +129,7 @@ namespace OmniBot.VR.Tests
             Assert.IsFalse(mapped.BothGrips);
             Assert.IsFalse(mapped.BothGripsPressed);
             Assert.IsTrue(mapped.BothGripsReleased);
+            Assert.IsTrue(mapped.ResetEmergencyStop);
             Assert.AreEqual(0.016f, mapped.DeltaTime, 0.0001f);
 
             var stop = new TeleopInput
@@ -136,6 +139,7 @@ namespace OmniBot.VR.Tests
                 BothGrips = true,
                 BothGripsPressed = true,
                 BothGripsReleased = false,
+                ResetEmergencyStop = true,
             };
             var stopped = ComfortControlMapping.Apply(stop, leftHanded: true);
             Assert.IsTrue(stopped.BothGrips);
@@ -143,6 +147,7 @@ namespace OmniBot.VR.Tests
             Assert.IsFalse(stopped.BothGripsReleased);
             Assert.IsTrue(stopped.LeftGrip);
             Assert.IsTrue(stopped.RightGrip);
+            Assert.IsTrue(stopped.ResetEmergencyStop);
         }
 
         [Test]

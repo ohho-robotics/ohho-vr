@@ -76,6 +76,22 @@ namespace OmniBot.VR.Control
         /// <summary>Heartbeat, safety latch, and post-reconnect deadman hold.</summary>
         public TeleopSafetySession Safety => _safety;
 
+        /// <summary>
+        /// Latch copied off the drive scheme in <see cref="StopTeleop"/> so the
+        /// next <see cref="StartTeleop"/> can put it back on the same endpoint.
+        /// A different connection does not inherit it. This is not keyed by
+        /// <see cref="RobotProfile.RobotId"/>, which is the hardware model id.
+        /// </summary>
+        private bool _emergencyStopLatched;
+
+        /// <summary>ip:port the latch was taken on. Empty when no ConnectionManager is loaded.</summary>
+        private string _emergencyStopEndpoint;
+
+        /// <summary>When set, replaces the ConnectionManager endpoint (edit-mode tests).</summary>
+        private string _endpointKeyOverride;
+
+        private ConnectionManager _connection;
+
         /// <summary>One-line drive control hint (for onboarding / HUD).</summary>
         public string DriveHint => _drive?.HudHint ?? "No drive on this robot";
         /// <summary>One-line manipulation control hint (for onboarding / HUD).</summary>
@@ -207,6 +223,9 @@ namespace OmniBot.VR.Control
         {
             if (!_teleopActive) return;
 
+            // A HUD reconnect to another ip:port must not keep this scheme blocked.
+            ReleaseLatchIfEndpointChanged();
+
             bool linkUp = Link != null && Link.IsConnected;
             bool aerialScheme = _drive is AerialDriveScheme;
             bool aerialUp = aerialScheme && _aerialClient != null && _aerialClient.IsConnected;
@@ -234,31 +253,34 @@ namespace OmniBot.VR.Control
             if (_safety.ConsumeLinkRestored())
                 AdvertiseTopics(Profile);
 
-            if (!aerialScheme || (!linkUp && !aerialUp)) return;
-
-            bool deadman = TeleopSafetySession.IsDeadmanHeld(input);
-            if (_aerialMotionHeld && _safety.OperatorPresent && !_safety.Latched)
+            if (aerialScheme && (linkUp || aerialUp))
             {
-                if (!deadman)
-                    _aerialDeadmanReleased = true;
-                else if (_aerialDeadmanReleased)
+                bool deadman = TeleopSafetySession.IsDeadmanHeld(input);
+                if (_aerialMotionHeld && _safety.OperatorPresent && !_safety.Latched)
                 {
-                    _aerialMotionHeld = false;
-                    _aerialDeadmanReleased = false;
+                    if (!deadman)
+                        _aerialDeadmanReleased = true;
+                    else if (_aerialDeadmanReleased)
+                    {
+                        _aerialMotionHeld = false;
+                        _aerialDeadmanReleased = false;
+                    }
                 }
+
+                var aerialInput = input;
+                if (!_safety.OperatorPresent || _safety.Latched || _aerialMotionHeld)
+                {
+                    // Grip deadman and both-grip e-stop still reach the scheme.
+                    // Stick axes stay at zero until presence is back and the
+                    // deadman has been released and pressed again.
+                    aerialInput.LeftStick = Vector2.zero;
+                    aerialInput.RightStick = Vector2.zero;
+                }
+
+                _drive.Tick(ref aerialInput, Link);
             }
 
-            var aerialInput = input;
-            if (!_safety.OperatorPresent || _safety.Latched || _aerialMotionHeld)
-            {
-                // Grip deadman and both-grip e-stop still reach the scheme.
-                // Stick axes stay at zero until presence is back and the
-                // deadman has been released and pressed again.
-                aerialInput.LeftStick = Vector2.zero;
-                aerialInput.RightStick = Vector2.zero;
-            }
-
-            _drive.Tick(ref aerialInput, Link);
+            RememberLatchEndpoint();
         }
 
         private TeleopInput ReadInput()
@@ -273,6 +295,9 @@ namespace OmniBot.VR.Control
             bool bothGrips = leftGrip && rightGrip;
             BothGripsHeld = bothGrips;
             AnyGripHeld = leftGrip || rightGrip;
+            // Left X is the explicit e-stop reset. Grip release must not clear it:
+            // one grip is the deadman and the right grip is also turbo.
+            bool resetEStop = OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.LTouch);
 
             var input = new TeleopInput
             {
@@ -283,6 +308,7 @@ namespace OmniBot.VR.Control
                 BothGrips = bothGrips,
                 BothGripsPressed = bothGrips && !_prevBothGrips,
                 BothGripsReleased = !bothGrips && _prevBothGrips,
+                ResetEmergencyStop = resetEStop,
                 DeltaTime = Time.deltaTime,
             };
             input = ComfortControlMapping.Apply(
@@ -375,6 +401,16 @@ namespace OmniBot.VR.Control
             if (profile.HasArm)
                 EnsureWorkspaceOrigin(profile);
             _drive = ControlSchemeFactory.CreateDriveScheme(profile);
+            if (_emergencyStopLatched && _drive is DriveSchemeBase drive)
+            {
+                if (SameEndpoint(_emergencyStopEndpoint, CurrentEndpointKey()))
+                    drive.RestoreEmergencyStopLatch();
+                else
+                {
+                    _emergencyStopLatched = false;
+                    _emergencyStopEndpoint = null;
+                }
+            }
             AttachAerialClient(_drive);
             _manip = ControlSchemeFactory.CreateManipulationScheme(profile, handWorkspaceOrigin);
             if (profile.HasArm)
@@ -404,6 +440,23 @@ namespace OmniBot.VR.Control
         /// <summary>Stop teleoperation: zero velocity, disarm arm, drop the schemes.</summary>
         public void StopTeleop()
         {
+            if (_drive is DriveSchemeBase drive)
+            {
+                if (drive.IsEmergencyStopActive)
+                {
+                    // Keep the endpoint captured when the latch engaged. Reading
+                    // it only here would attach the latch to a connection the
+                    // operator already switched away from.
+                    if (!_emergencyStopLatched || _emergencyStopEndpoint == null)
+                        _emergencyStopEndpoint = CurrentEndpointKey();
+                    _emergencyStopLatched = true;
+                }
+                else
+                {
+                    _emergencyStopLatched = false;
+                    _emergencyStopEndpoint = null;
+                }
+            }
             if (!_teleopActive && _drive == null && _manip == null) return;
             bool aerial = _drive is AerialDriveScheme;
             _teleopActive = false;
@@ -540,6 +593,44 @@ namespace OmniBot.VR.Control
 
         /// <summary>Confirm the HUD e-stop reset and call the robot service.</summary>
         public bool ConfirmEstopReset() => _safety.ConfirmEstopReset(Link);
+
+        /// <summary>
+        /// ROSBridge endpoint the latch is scoped to. ConnectionManager ip:port,
+        /// or the edit-mode override. Not the hardware model id.
+        /// </summary>
+        private string CurrentEndpointKey()
+        {
+            if (_endpointKeyOverride != null) return _endpointKeyOverride;
+            if (_connection == null)
+                _connection = FindObjectOfType<ConnectionManager>();
+            if (_connection == null) return "";
+            return (_connection.CurrentIp ?? "") + ":" + _connection.CurrentPort;
+        }
+
+        private static bool SameEndpoint(string a, string b)
+            => string.Equals(a ?? "", b ?? "", StringComparison.Ordinal);
+
+        /// <summary>
+        /// The scheme is latched for a previous connection. Clear it locally
+        /// and do not publish emergency_stop false.
+        /// </summary>
+        private void ReleaseLatchIfEndpointChanged()
+        {
+            if (!(_drive is DriveSchemeBase drive) || !drive.IsEmergencyStopActive) return;
+            if (!_emergencyStopLatched || _emergencyStopEndpoint == null) return;
+            if (SameEndpoint(_emergencyStopEndpoint, CurrentEndpointKey())) return;
+            drive.DiscardEmergencyStopLatch();
+            _emergencyStopLatched = false;
+            _emergencyStopEndpoint = null;
+        }
+
+        private void RememberLatchEndpoint()
+        {
+            if (!(_drive is DriveSchemeBase drive) || !drive.IsEmergencyStopActive) return;
+            if (_emergencyStopLatched && _emergencyStopEndpoint != null) return;
+            _emergencyStopLatched = true;
+            _emergencyStopEndpoint = CurrentEndpointKey();
+        }
 
         /// <summary>
         /// Takeoff button. The phrase has to match before anything is queued.

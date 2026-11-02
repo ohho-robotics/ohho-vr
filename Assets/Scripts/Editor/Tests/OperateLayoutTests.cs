@@ -352,19 +352,47 @@ namespace OmniBot.VR.Tests
         }
 
         [Test]
-        public void GripEStop_StillClearsOnRelease_WhenUiLatchIsOff()
+        public void GripEStop_StaysLatchedOnRelease_UntilExplicitReset_WhenUiLatchIsOff()
         {
             var link = new RecordingLink();
             var scheme = new DifferentialDriveScheme();
             scheme.Configure(DriveProfile());
-            var press = new TeleopInput { BothGrips = true, BothGripsPressed = true, DeltaTime = 0.1f };
+            var press = new TeleopInput
+            {
+                BothGrips = true,
+                BothGripsPressed = true,
+                LeftGrip = true,
+                RightGrip = true,
+                DeltaTime = 0.1f,
+            };
             scheme.Tick(ref press, link);
             Assert.IsTrue(scheme.IsEmergencyStopActive);
 
-            var release = new TeleopInput { BothGrips = false, BothGripsReleased = true, DeltaTime = 0.1f };
+            link.Published.Clear();
+            var release = new TeleopInput
+            {
+                BothGrips = false,
+                BothGripsReleased = true,
+                LeftStick = new Vector2(0f, 1f),
+                DeltaTime = 0.1f,
+            };
             scheme.Tick(ref release, link);
+            Assert.IsTrue(scheme.IsEmergencyStopActive);
+            Assert.IsFalse(SawBool(link, false));
+            Assert.AreEqual(0, NonZeroTwists(link));
+
+            link.Published.Clear();
+            var reset = new TeleopInput
+            {
+                ResetEmergencyStop = true,
+                LeftGrip = true,
+                LeftStick = new Vector2(0f, 1f),
+                DeltaTime = 0.1f,
+            };
+            scheme.Tick(ref reset, link);
             Assert.IsFalse(scheme.IsEmergencyStopActive);
             Assert.IsTrue(SawBool(link, false));
+            Assert.Greater(NonZeroTwists(link), 0);
         }
 
         [Test]
@@ -476,6 +504,7 @@ namespace OmniBot.VR.Tests
             return new TeleopInput
             {
                 LeftStick = new Vector2(0f, 1f),
+                LeftGrip = true,
                 DeltaTime = 0.1f,
             };
         }
