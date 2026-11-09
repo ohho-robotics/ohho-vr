@@ -49,6 +49,7 @@ namespace OmniBot.VR.Video
         private string _chromeKey = "";
         private float _saveTimer;
         private bool _poseDirty;
+        private bool _slotHost;
         private Texture2D _grey;
         private static TMP_FontAsset _font;
         private static bool _fontTried;
@@ -64,8 +65,7 @@ namespace OmniBot.VR.Video
         {
             _plan = plan;
             _sim = plan != null && plan.IsSim;
-            _canvas = GetComponentInParent<Canvas>();
-            _canvasRect = _canvas != null ? _canvas.GetComponent<RectTransform>() : null;
+            ResolveSurface();
             SetLegacyChrome(!_sim);
             if (!_sim)
             {
@@ -74,12 +74,27 @@ namespace OmniBot.VR.Video
                 return;
             }
             EnsureRoot();
-            EnsureDrag();
+            if (!_slotHost) EnsureDrag();
             ApplySize();
             RebuildChrome();
             bool show = isActiveAndEnabled;
             _root.gameObject.SetActive(show);
-            if (show) DimBackground();
+            if (show && !_slotHost) DimBackground();
+        }
+
+        /// <summary>
+        /// The camera page owns its canvas. The operate centre region is also
+        /// named Sim Screen; the curve stays inside that slot so the dashboard
+        /// around it is left in place.
+        /// </summary>
+        private void ResolveSurface()
+        {
+            _canvas = GetComponentInParent<Canvas>();
+            var own = transform as RectTransform;
+            _slotHost = own != null && gameObject.name == "Sim Screen";
+            _canvasRect = _slotHost
+                ? own
+                : (_canvas != null ? _canvas.GetComponent<RectTransform>() : null);
         }
 
         public void SetSelection(int index)
@@ -131,7 +146,7 @@ namespace OmniBot.VR.Video
 
         public void Persist()
         {
-            if (!_sim || _canvasRect == null) return;
+            if (_slotHost || !_sim || _canvasRect == null) return;
             var state = Capture();
             SimScreenPoseStore.Save(state);
             _savedPos = _canvasRect.localPosition;
@@ -144,7 +159,7 @@ namespace OmniBot.VR.Video
         {
             if (!_sim || _root == null) return;
             _root.gameObject.SetActive(true);
-            DimBackground();
+            if (!_slotHost) DimBackground();
         }
 
         private void OnDisable()
@@ -163,6 +178,17 @@ namespace OmniBot.VR.Video
         {
             FlushStats(Time.unscaledTimeAsDouble);
             if (!_sim || _canvasRect == null || _root == null) return;
+            if (_slotHost)
+            {
+                var slot = _canvasRect.rect;
+                if (slot.width > 8f && slot.height > 8f &&
+                    (Mathf.Abs(slot.width - _builtW) > 0.5f || Mathf.Abs(slot.height - _builtH) > 0.5f))
+                {
+                    BuildStrip();
+                    RebuildMesh();
+                }
+                return;
+            }
             var size = _canvasRect.sizeDelta;
             if (Mathf.Abs(size.x - _builtW) > 0.5f || Mathf.Abs(size.y - _builtH) > 0.5f)
                 RebuildMesh();
@@ -210,6 +236,12 @@ namespace OmniBot.VR.Video
         private void ApplySize()
         {
             if (_canvasRect == null) return;
+            if (_slotHost)
+            {
+                _savedPos = _canvasRect.localPosition;
+                _savedRot = _canvasRect.localRotation;
+                return;
+            }
             if (SimScreenPoseStore.TryLoad(out var saved))
             {
                 saved = SimScreenPose.Clamp(saved);
@@ -245,8 +277,19 @@ namespace OmniBot.VR.Video
         private void RebuildMesh()
         {
             if (_root == null || _canvasRect == null) return;
-            float width = Mathf.Max(8f, _canvasRect.sizeDelta.x);
-            float height = Mathf.Max(8f, _canvasRect.sizeDelta.y);
+            float width;
+            float height;
+            if (_slotHost)
+            {
+                var slot = _canvasRect.rect;
+                width = slot.width > 8f ? slot.width : Mathf.Max(8f, _canvasRect.sizeDelta.x);
+                height = slot.height > 8f ? slot.height : Mathf.Max(8f, _canvasRect.sizeDelta.y);
+            }
+            else
+            {
+                width = Mathf.Max(8f, _canvasRect.sizeDelta.x);
+                height = Mathf.Max(8f, _canvasRect.sizeDelta.y);
+            }
             _root.sizeDelta = new Vector2(width, height);
             _builtW = width;
             _builtH = height;
@@ -309,6 +352,18 @@ namespace OmniBot.VR.Video
             _poseDirty = true;
         }
 
+        private float StripWidth()
+        {
+            if (_canvasRect == null) return 1600f;
+            if (_slotHost)
+            {
+                float slot = _canvasRect.rect.width;
+                if (slot > 8f) return slot;
+                return 480f;
+            }
+            return _canvasRect.sizeDelta.x > 8f ? _canvasRect.sizeDelta.x : 1600f;
+        }
+
         private void BuildStrip()
         {
             if (_strip != null) DestroyObject(_strip.gameObject);
@@ -323,7 +378,7 @@ namespace OmniBot.VR.Video
             _strip.anchoredPosition = new Vector2(0f, 18f);
             int n = _plan != null ? _plan.Views.Count : 0;
             float gap = 16f;
-            float width = _canvasRect != null ? _canvasRect.sizeDelta.x : 1600f;
+            float width = StripWidth();
             float btnW = n > 0 ? Mathf.Min(280f, (width - 120f - gap * (n - 1)) / n) : 200f;
             if (btnW < 80f) btnW = 80f;
             _strip.sizeDelta = new Vector2(n * btnW + Mathf.Max(0, n - 1) * gap, 76f);

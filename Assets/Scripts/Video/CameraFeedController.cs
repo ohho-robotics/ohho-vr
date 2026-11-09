@@ -222,6 +222,19 @@ namespace OmniBot.VR.Video
             RefreshStats();
         }
 
+        /// <summary>Point the feed at the operate sim slot.</summary>
+        public void AttachDisplay(RawImage image, TMP_Text nameLabel)
+        {
+            if (image != null) displayImage = image;
+            if (nameLabel != null) cameraNameOverlay = nameLabel;
+        }
+
+        /// <summary>Drop the active stream. Used when the operate slot takes over.</summary>
+        public void StopFeed()
+        {
+            StopAll();
+        }
+
         private void EnsurePresenter()
         {
             if (_presenter != null) return;

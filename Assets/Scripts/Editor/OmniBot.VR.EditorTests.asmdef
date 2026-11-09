@@ -3,6 +3,7 @@
     "rootNamespace": "OmniBot.VR.Tests",
     "references": [
         "OmniBot.VR",
+        "Unity.TextMeshPro",
         "Oculus.VR",
         "OmniBot.VR.AprilTagSpike",
         "Ohho.TelemetryHud",

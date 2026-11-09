@@ -96,10 +96,14 @@ namespace OmniBot.VR.Control.Drive
 
             // Sim-serve has its own grip deadman. The Ohho e-stop is also the
             // latched base stop: both grips set it, and releasing the grips
-            // does not clear it. Left X does.
-            if (input.BothGrips && !EmergencyStopActive)
+            // does not clear it. Left X does, unless the operate-screen latch
+            // is still holding the stop.
+            if (OperateSafetyLatch.UiEStopLatched && !EmergencyStopActive)
                 TriggerEmergencyStop(link);
-            else if (input.ResetEmergencyStop && EmergencyStopActive && !input.BothGrips)
+            else if (input.BothGrips && !EmergencyStopActive)
+                TriggerEmergencyStop(link);
+            else if (input.ResetEmergencyStop && EmergencyStopActive && !input.BothGrips
+                     && !OperateSafetyLatch.UiEStopLatched)
                 ClearEmergencyStop(link);
 
             bool latched = EmergencyStopActive;
