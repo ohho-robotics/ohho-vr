@@ -1,0 +1,46 @@
+{
+  "v": "1.0.0",
+  "id": "aerial-craft",
+  "model": "Aerial craft",
+  "drive": {
+    "kind": "fixed-base",
+    "holonomic": true,
+    "caps": { "vx_mps": 0.2, "vy_mps": 0.2, "wz_rad_s": 1.0 }
+  },
+  "arms": [],
+  "topics": {
+    "cmd": "/cmd_vel",
+    "state": "/odom",
+    "estop": "/emergency_stop",
+    "heartbeat": "/ohho/heartbeat",
+    "telemetry": "/ohho/telemetry",
+    "images": ["/camera/front/image_raw"]
+  },
+  "cameras": [
+    { "name": "front", "kind": "rgb", "frame": "front_camera_link", "topic": "/camera/front/image_raw" }
+  ],
+  "urdf_url": "package://ohho/description/aerial_craft.urdf",
+  "apriltags": [],
+  "telemetry": {
+    "schema_id": "ohho.telemetry.v1",
+    "robot_id": "aerial-craft",
+    "kind": "sim",
+    "fields": ["base"]
+  },
+  "safety": {
+    "hard": {
+      "max_vx_mps": 0.2,
+      "max_vy_mps": 0.2,
+      "max_wz_rad_s": 1.0,
+      "max_accel_x_mps2": 0.5,
+      "max_accel_y_mps2": 0.5,
+      "max_accel_wz_rad_s2": 2.0,
+      "max_joint_step_rad": 0.15
+    }
+  },
+  "capability_params": {
+    "aerial": { "frames": ["base_link"], "max_climb": 0.2 },
+    "base.drive": { "max_vx": 0.2, "max_vy": 0.2, "max_wz": 1.0 },
+    "base.holonomic_drive": { "max_vx": 0.2, "max_vy": 0.2, "max_wz": 1.0 }
+  }
+}

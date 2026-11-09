@@ -110,14 +110,19 @@ namespace OmniBot.VR.Control
 
             var hard = descriptor.Safety.Hard;
             var caps = descriptor.Drive.Caps;
-            var drive = ParseDescriptorDrive(descriptor.Drive.Kind);
-            bool fixedBase = drive == DriveKind.FixedBase;
+            var parsedDrive = ParseDescriptorDrive(descriptor.Drive.Kind);
+            var capabilities = DescriptorCapabilitySet.From(descriptor);
+            // No known drive capability means no motion. Do not keep a catalog
+            // category's scheme, and do not guess differential for an unknown kind.
+            bool drives = CapabilitySchemes.TrySelectDrive(capabilities, parsedDrive, out DriveKind selectedDrive);
+            var drive = drives ? selectedDrive : parsedDrive;
+            bool fixedBase = !drives;
             bool sameRobot = SameRobot(catalogFallback, descriptor);
 
             float maxLin = fixedBase ? 0f : Cap(caps.VxMps, hard.MaxVxMps, RobotConfig.MAX_LINEAR_VEL);
             float maxLat = fixedBase ? 0f : Cap(caps.VyMps, hard.MaxVyMps, RobotConfig.MAX_LINEAR_VEL);
             float maxAng = fixedBase ? 0f : Cap(caps.WzRadS, hard.MaxWzRadS, RobotConfig.MAX_ANGULAR_VEL);
-            if (!descriptor.Drive.Holonomic) maxLat = 0f;
+            if (!descriptor.Drive.Holonomic && !capabilities.Holonomic) maxLat = 0f;
 
             if (sameRobot)
             {
@@ -186,7 +191,7 @@ namespace OmniBot.VR.Control
                 Category = sameRobot ? catalogFallback.Category : "",
                 Drive = drive,
                 DriveLabel = spec.Label,
-                Holonomic = descriptor.Drive.Holonomic && !fixedBase,
+                Holonomic = (descriptor.Drive.Holonomic || capabilities.Holonomic) && !fixedBase,
                 BaseDof = fixedBase ? 0 : spec.BaseDof,
                 BaseActionLabels = spec.ActionLabels,
                 MaxLinVel = maxLin,
@@ -206,12 +211,14 @@ namespace OmniBot.VR.Control
                 Joints = joints,
                 HardJoints = CloneJoints(joints),
                 CanNavigate = !fixedBase && spec.BaseDof > 0,
-                CanManipulate = hasArm,
-                IsAerial = false,
+                CanManipulate = hasArm && CapabilitySchemes.AllowsManipulation(capabilities),
+                IsAerial = capabilities.Aerial,
                 IsUnderwater = sameRobot && catalogFallback.IsUnderwater,
                 IsStationary = fixedBase || spec.BaseDof == 0,
-                IsLegged = drive == DriveKind.Quadruped || drive == DriveKind.Bipedal,
-                IsDualArm = descriptor.Arms != null && descriptor.Arms.Length > 1,
+                IsLegged = capabilities.LeggedPose || capabilities.HumanoidPosture || capabilities.HumanoidLocomotion
+                    || drive == DriveKind.Quadruped || drive == DriveKind.Hexapod || drive == DriveKind.Bipedal,
+                IsDualArm = capabilities.DualArm || (descriptor.Arms != null && descriptor.Arms.Length > 1),
+                Capabilities = capabilities,
                 IkLocation = ik,
                 Topics = topics,
                 HandWorkspaceRadius = workspace,

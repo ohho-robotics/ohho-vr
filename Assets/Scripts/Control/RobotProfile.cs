@@ -145,6 +145,12 @@ namespace OmniBot.VR.Control
         public bool IsStationary;
         public bool IsLegged;
 
+        /// <summary>
+        /// Set from a latched descriptor. Drive and manipulation schemes read these
+        /// names. Null on the catalog-only path, which still uses <see cref="Drive"/>.
+        /// </summary>
+        public DescriptorCapabilitySet Capabilities;
+
         // ── ROS topics the teleop layer publishes / subscribes ────────────────
         public RobotTopics Topics;
 
