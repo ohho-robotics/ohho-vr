@@ -13,6 +13,7 @@ using OmniBot.VR.UI;
 using OmniBot.VR.UI.Auth;
 using OmniBot.VR.UI.Console;
 using OmniBot.VR.UI.Garage;
+using OmniBot.VR.UI.Operate;
 using OmniBot.VR.UI.Session;
 using OmniBot.VR.UI.Teleop;
 using OmniBot.VR.Video;
@@ -326,8 +327,10 @@ namespace OmniBot.VR.Editor
 
             var teleopScreen = BuildCanvas("OhhO Teleop Screen", w, h, Vector3.zero);
             teleopScreen.transform.SetParent(rootGo.transform, false);
-            teleopScreen.transform.localPosition = new Vector3(radius * Mathf.Sin(45f * Mathf.Deg2Rad), 0f, radius * Mathf.Cos(45f * Mathf.Deg2Rad));
-            teleopScreen.transform.localRotation = Quaternion.Euler(0, 45f, 0);
+            teleopScreen.transform.localPosition = new Vector3(0f, 0f, radius);
+            teleopScreen.transform.localRotation = Quaternion.identity;
+            var operatePlacer = teleopScreen.AddComponent<WorldSpaceUiPlacer>();
+            operatePlacer.SetDistance(radius);
 
             var controlsScreen = BuildCanvas("OhhO Controls Screen", w, h, Vector3.zero);
             controlsScreen.transform.SetParent(rootGo.transform, false);
@@ -392,13 +395,14 @@ namespace OmniBot.VR.Editor
                 "<b>DRIVING</b>\n" +
                 "• Left Joystick: Move Forward/Back/Strafe\n" +
                 "• Right Joystick: Turn (Yaw)\n" +
-                "• Right Grip: Turbo Speed\n\n" +
+                "• Right Grip: Turbo Speed (clamped to 0.2 m/s)\n" +
+                "• Hold one grip to drive (deadman)\n\n" +
                 "<b>ROBOT ARM</b>\n" +
                 "• Right Hand: Move physical hand to move gripper\n" +
                 "• Right Pinch: Open/Close Gripper\n" +
                 "• Left Thumbs-Up (Hold 0.5s): Enable/Clutch Arm\n\n" +
                 "<b>SAFETY</b>\n" +
-                "• Both Grips Squeezed: Emergency Stop\n\n" +
+                "• Both Grips Squeezed: Emergency Stop (latched until left X reset)\n\n" +
                 "<b>DATASET RECORDING</b>\n" +
                 "• Start/Stop episodes using the right-side Teleop panel.\n" +
                 "• Use the buttons below to trigger ROSBags on the Pi.";
@@ -571,121 +575,102 @@ namespace OmniBot.VR.Editor
             return page;
         }
 
-        // ── Teleop ────────────────────────────────────────────────────────────
+        // ── Teleop / operate dashboard ────────────────────────────────────────
         private static GameObject BuildTeleopPage(Transform parent)
         {
-            var page = MakePage("Teleop Page", parent);
+            var page = new GameObject("Teleop Page", typeof(RectTransform));
+            page.transform.SetParent(parent, false);
+            Stretch((RectTransform)page.transform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
 
-            // ── Left column: robot + connection + telemetry ──
-            var left = MakePanel("Left Column", page.transform, new Color(0, 0, 0, 0));
-            Place(left.GetComponent<RectTransform>(), new Vector2(0, 0.5f), new Vector2(500, 880), new Vector2(20, 0));
+            var dash = OperateDashboard.Build((RectTransform)page.transform);
+            var column = dash.transform.Find("Telemetry Column");
+            Transform safetyParent = column != null ? column : page.transform;
 
-            var robotName = MakeText("Robot Name", left.transform, "Robot", 36, Cyan, TextAlignmentOptions.MidlineLeft);
-            robotName.fontStyle = FontStyles.Bold;
-            Place(robotName.rectTransform, new Vector2(0, 1), new Vector2(480, 50), new Vector2(20, -30));
+            var safetyBanner = MakePanel("Safety Banner", safetyParent, new Color(0.12f, 0.14f, 0.2f, 0.94f));
+            var safetyBannerRt = safetyBanner.GetComponent<RectTransform>();
+            if (column != null)
+            {
+                FitInColumn(safetyBannerRt, 132f);
+                safetyBanner.transform.SetAsFirstSibling();
+            }
+            else
+                Place(safetyBannerRt, new Vector2(0.5f, 1f), new Vector2(980f, 88f), new Vector2(0f, -12f));
 
-            var connTitle = MakeText("Conn Title", left.transform, "CONNECTION", 20, TextMut, TextAlignmentOptions.MidlineLeft);
-            Place(connTitle.rectTransform, new Vector2(0, 1), new Vector2(480, 30), new Vector2(20, -100));
+            var safetyStatus = MakeText("Safety Status", safetyBanner.transform, "SAFETY — waiting for /ohho/safety/state", 22, TextMain, TextAlignmentOptions.MidlineLeft);
+            safetyStatus.fontStyle = FontStyles.Bold;
+            if (column != null)
+            {
+                var statusRt = safetyStatus.rectTransform;
+                statusRt.anchorMin = new Vector2(0f, 1f);
+                statusRt.anchorMax = new Vector2(1f, 1f);
+                statusRt.pivot = new Vector2(0.5f, 1f);
+                statusRt.sizeDelta = new Vector2(-16f, 36f);
+                statusRt.anchoredPosition = new Vector2(0f, -6f);
+            }
+            else
+                Place(safetyStatus.rectTransform, new Vector2(0f, 0.5f), new Vector2(520f, 64f), new Vector2(20f, -32f));
 
-            var ip = MakeInputField("IP Field", left.transform, "192.168.1.101", 300, 56);
-            Place(ip.GetComponent<RectTransform>(), new Vector2(0, 1), new Vector2(300, 56), new Vector2(20, -150));
-            var port = MakeInputField("Port Field", left.transform, "9090", 140, 56);
-            Place(port.GetComponent<RectTransform>(), new Vector2(0, 1), new Vector2(140, 56), new Vector2(340, -150));
+            var estopReset = MakeButton("E-Stop Reset", safetyBanner.transform, "Reset e-stop", 18, Danger, TextMain);
+            var estopConfirm = MakeButton("E-Stop Confirm", safetyBanner.transform, "Confirm reset", 18, new Color(0.95f, 0.85f, 0.2f), Color.black);
+            if (column != null)
+            {
+                PlaceColumnButton(estopReset, 0.02f, 0.49f);
+                PlaceColumnButton(estopConfirm, 0.51f, 0.98f);
+            }
+            else
+            {
+                Place(estopReset.GetComponent<RectTransform>(), new Vector2(1f, 0.5f), new Vector2(220f, 56f), new Vector2(-250f, 0f));
+                Place(estopConfirm.GetComponent<RectTransform>(), new Vector2(1f, 0.5f), new Vector2(220f, 56f), new Vector2(-16f, 0f));
+            }
+            estopConfirm.gameObject.SetActive(false);
 
-            var connect = MakeButton("Connect Button", left.transform, "Connect", 24, Cyan, Color.black);
-            Place(connect.GetComponent<RectTransform>(), new Vector2(0, 1), new Vector2(230, 56), new Vector2(20, -225));
-            var disconnect = MakeButton("Disconnect Button", left.transform, "Disconnect", 24, Surface2, TextMain);
-            Place(disconnect.GetComponent<RectTransform>(), new Vector2(0, 1), new Vector2(230, 56), new Vector2(270, -225));
+            var telemetryPanel = MakePanel("Telemetry V2", safetyParent, new Color(0.04f, 0.06f, 0.10f, 0.94f));
+            var telemetryRt = telemetryPanel.GetComponent<RectTransform>();
+            if (column != null)
+                FitInColumn(telemetryRt, 180f);
+            else
+                Place(telemetryRt, new Vector2(0.5f, 0.5f), new Vector2(680f, 860f), new Vector2(40f, 0f));
+            if (column != null)
+                telemetryPanel.transform.SetSiblingIndex(1);
 
-            var dot = MakeImage("Connection Dot", left.transform, Danger);
-            Place(dot.rectTransform, new Vector2(0, 1), new Vector2(22, 22), new Vector2(24, -300));
-            var connStatus = MakeText("Connection Status", left.transform, "Disconnected", 22, TextMut, TextAlignmentOptions.MidlineLeft);
-            Place(connStatus.rectTransform, new Vector2(0, 1), new Vector2(400, 30), new Vector2(60, -296));
-
-            var telTitle = MakeText("Tel Title", left.transform, "TELEMETRY", 20, TextMut, TextAlignmentOptions.MidlineLeft);
-            Place(telTitle.rectTransform, new Vector2(0, 1), new Vector2(480, 30), new Vector2(20, -360));
-            var pose = MakeText("Pose Text", left.transform, "x —   y —", 22, TextMain, TextAlignmentOptions.MidlineLeft);
-            Place(pose.rectTransform, new Vector2(0, 1), new Vector2(480, 30), new Vector2(20, -400));
-            var vel = MakeText("Velocity Text", left.transform, "vx —   vy —   ω —", 22, TextMain, TextAlignmentOptions.MidlineLeft);
-            Place(vel.rectTransform, new Vector2(0, 1), new Vector2(480, 30), new Vector2(20, -440));
-            var arm = MakeText("Arm Text", left.transform, "arm: —", 22, TextMain, TextAlignmentOptions.MidlineLeft);
-            Place(arm.rectTransform, new Vector2(0, 1), new Vector2(480, 30), new Vector2(20, -480));
-            var mode = MakeText("Mode Text", left.transform, "mode: —", 22, TextMain, TextAlignmentOptions.MidlineLeft);
-            Place(mode.rectTransform, new Vector2(0, 1), new Vector2(480, 30), new Vector2(20, -520));
-
-            var telemetryPanel = MakePanel("Telemetry V2", page.transform, new Color(0.04f, 0.06f, 0.10f, 0.94f));
-            Place(telemetryPanel.GetComponent<RectTransform>(), new Vector2(0.5f, 0.5f), new Vector2(680, 860), new Vector2(40, 0));
             var telemetryBody = MakeText("Telemetry Body", telemetryPanel.transform, "telemetry", 16, TextMain, TextAlignmentOptions.TopLeft);
             telemetryBody.richText = true;
             telemetryBody.enableWordWrapping = true;
-            Place(telemetryBody.rectTransform, new Vector2(0, 0), new Vector2(650, 760), new Vector2(14, 16));
-            var telemetryMode = MakeButton("Telemetry Mode", telemetryPanel.transform, "Expanded", 20, Cyan, Color.black);
-            Place(telemetryMode.GetComponent<RectTransform>(), new Vector2(1, 1), new Vector2(180, 44), new Vector2(-12, -12));
+            Stretch(telemetryBody.rectTransform, Vector2.zero, Vector2.one, new Vector2(-24f, -56f), Vector2.zero);
+            var telemetryMode = MakeButton("Telemetry Mode", telemetryPanel.transform, "Expanded", 18, Cyan, Color.black);
+            Place(telemetryMode.GetComponent<RectTransform>(), new Vector2(1f, 1f), new Vector2(140f, 36f), new Vector2(-8f, -8f));
 
-            var hints = MakeText("Hints Text", left.transform, "", 19, TextMut, TextAlignmentOptions.TopLeft);
-            hints.enableWordWrapping = true;
-            Place(hints.rectTransform, new Vector2(0, 0), new Vector2(480, 180), new Vector2(20, 120));
-
-            var back = MakeButton("Back Button", left.transform, "< Garage", 24, Violet, TextMain);
-            Place(back.GetComponent<RectTransform>(), new Vector2(0, 0), new Vector2(220, 56), new Vector2(20, 20));
-
-            // ── Right column: recording ──
-            var right = MakePanel("Right Column", page.transform, new Color(0, 0, 0, 0));
-            Place(right.GetComponent<RectTransform>(), new Vector2(1, 0.5f), new Vector2(400, 880), new Vector2(-20, 0));
-
-            var recTitle = MakeText("Rec Title", right.transform, "DATASET RECORDING", 20, TextMut, TextAlignmentOptions.MidlineLeft);
-            Place(recTitle.rectTransform, new Vector2(0, 1), new Vector2(380, 30), new Vector2(20, -30));
-
-            var recDot = MakeImage("Recording Dot", right.transform, new Color(0.45f, 0.45f, 0.5f));
-            Place(recDot.rectTransform, new Vector2(0, 1), new Vector2(22, 22), new Vector2(22, -84));
-            var recStatus = MakeText("Recording Status", right.transform, "Idle", 22, TextMain, TextAlignmentOptions.MidlineLeft);
-            Place(recStatus.rectTransform, new Vector2(0, 1), new Vector2(340, 30), new Vector2(58, -80));
-
-            var startRec = MakeButton("Start Recording", right.transform, "Start Recording", 24, Cyan, Color.black);
-            Place(startRec.GetComponent<RectTransform>(), new Vector2(0, 1), new Vector2(360, 60), new Vector2(20, -140));
-            var stopSave = MakeButton("Stop & Save", right.transform, "Stop & Save", 24, Surface2, TextMain);
-            Place(stopSave.GetComponent<RectTransform>(), new Vector2(0, 1), new Vector2(360, 60), new Vector2(20, -215));
-            var discard = MakeButton("Discard", right.transform, "Discard", 24, Danger, TextMain);
-            Place(discard.GetComponent<RectTransform>(), new Vector2(0, 1), new Vector2(360, 60), new Vector2(20, -290));
-
-            var export = MakeButton("Export Button", right.transform, "Export to Robot", 24, Surface2, TextMain);
-            Place(export.GetComponent<RectTransform>(), new Vector2(0, 1), new Vector2(360, 60), new Vector2(20, -365));
-            var exportStatus = MakeText("Export Status", right.transform, "", 19, TextMut, TextAlignmentOptions.TopLeft);
-            exportStatus.enableWordWrapping = true;
-            Place(exportStatus.rectTransform, new Vector2(0, 1), new Vector2(360, 60), new Vector2(20, -440));
-            exportStatus.gameObject.SetActive(false);
-
-            var recHint = MakeText("Rec Hint", right.transform, "Episodes save to the headset and export to the robot for training.", 19, TextMut, TextAlignmentOptions.TopLeft);
-            recHint.enableWordWrapping = true;
-            Place(recHint.rectTransform, new Vector2(0, 1), new Vector2(360, 120), new Vector2(20, -520));
-
-            // ── TeleopHudController wiring ──
             var hud = page.AddComponent<TeleopHudController>();
             var hso = new SerializedObject(hud);
-            hso.FindProperty("ipField").objectReferenceValue = ip;
-            hso.FindProperty("portField").objectReferenceValue = port;
-            hso.FindProperty("connectButton").objectReferenceValue = connect;
-            hso.FindProperty("disconnectButton").objectReferenceValue = disconnect;
-            hso.FindProperty("connectionDot").objectReferenceValue = dot;
-            hso.FindProperty("connectionStatusText").objectReferenceValue = connStatus;
-            hso.FindProperty("poseText").objectReferenceValue = pose;
-            hso.FindProperty("velocityText").objectReferenceValue = vel;
-            hso.FindProperty("armText").objectReferenceValue = arm;
-            hso.FindProperty("modeText").objectReferenceValue = mode;
+            hso.FindProperty("ipField").objectReferenceValue = dash.IpField;
+            hso.FindProperty("portField").objectReferenceValue = dash.PortField;
+            hso.FindProperty("connectButton").objectReferenceValue = dash.ConnectButton;
+            hso.FindProperty("disconnectButton").objectReferenceValue = dash.DisconnectButton;
+            hso.FindProperty("connectionDot").objectReferenceValue = dash.ConnectionDot;
+            hso.FindProperty("connectionStatusText").objectReferenceValue = dash.ConnectionStatusText;
+            hso.FindProperty("poseText").objectReferenceValue = dash.PoseText;
+            hso.FindProperty("velocityText").objectReferenceValue = dash.VelocityText;
+            hso.FindProperty("armText").objectReferenceValue = dash.ArmText;
+            hso.FindProperty("modeText").objectReferenceValue = dash.ModeText;
             hso.FindProperty("telemetryBody").objectReferenceValue = telemetryBody;
             hso.FindProperty("telemetryModeButton").objectReferenceValue = telemetryMode;
             hso.FindProperty("telemetryModeLabel").objectReferenceValue = telemetryMode.GetComponentInChildren<TMP_Text>();
-
-            hso.FindProperty("startRecordingButton").objectReferenceValue = startRec;
-            hso.FindProperty("stopSaveButton").objectReferenceValue = stopSave;
-            hso.FindProperty("discardButton").objectReferenceValue = discard;
-            hso.FindProperty("recordingStatusText").objectReferenceValue = recStatus;
-            hso.FindProperty("recordingDot").objectReferenceValue = recDot;
-            hso.FindProperty("exportButton").objectReferenceValue = export;
-            hso.FindProperty("exportStatusText").objectReferenceValue = exportStatus;
-            hso.FindProperty("robotNameText").objectReferenceValue = robotName;
-            hso.FindProperty("hintsText").objectReferenceValue = hints;
-            hso.FindProperty("backButton").objectReferenceValue = back;
+            hso.FindProperty("cycleCameraButton").objectReferenceValue = dash.CycleCameraButton;
+            hso.FindProperty("cameraFeed").objectReferenceValue = dash.SimFeedController;
+            hso.FindProperty("startRecordingButton").objectReferenceValue = dash.StartRecordingButton;
+            hso.FindProperty("stopSaveButton").objectReferenceValue = dash.StopSaveButton;
+            hso.FindProperty("discardButton").objectReferenceValue = dash.DiscardButton;
+            hso.FindProperty("recordingStatusText").objectReferenceValue = dash.RecordingStatusText;
+            hso.FindProperty("recordingDot").objectReferenceValue = dash.RecordingDot;
+            hso.FindProperty("exportButton").objectReferenceValue = dash.ExportButton;
+            hso.FindProperty("exportStatusText").objectReferenceValue = dash.ExportStatusText;
+            hso.FindProperty("robotNameText").objectReferenceValue = dash.RobotNameText;
+            hso.FindProperty("hintsText").objectReferenceValue = dash.HintsText;
+            hso.FindProperty("backButton").objectReferenceValue = dash.BackButton;
+            hso.FindProperty("safetyBanner").objectReferenceValue = safetyBanner.GetComponent<Image>();
+            hso.FindProperty("safetyStatusText").objectReferenceValue = safetyStatus;
+            hso.FindProperty("estopResetButton").objectReferenceValue = estopReset;
+            hso.FindProperty("estopConfirmButton").objectReferenceValue = estopConfirm;
             hso.ApplyModifiedPropertiesWithoutUndo();
             return page;
         }
@@ -762,13 +747,13 @@ namespace OmniBot.VR.Editor
                 EditorUtility.SetDirty(websiteBtn);
             }
             
+            var dash = teleop != null ? teleop.GetComponent<OperateDashboard>() : null;
             var hud = teleop != null ? teleop.GetComponent<TeleopHudController>() : null;
-            if (hud != null && cameraPage != null)
+            if (hud != null && dash != null)
             {
                 var hso = new SerializedObject(hud);
-                hso.FindProperty("cameraFeed").objectReferenceValue = cameraPage.GetComponent<CameraFeedController>();
-                var cycleBtn = cameraPage.transform.Find("Cycle Camera Button")?.GetComponent<Button>();
-                if (cycleBtn != null) hso.FindProperty("cycleCameraButton").objectReferenceValue = cycleBtn;
+                hso.FindProperty("cameraFeed").objectReferenceValue = dash.SimFeedController;
+                hso.FindProperty("cycleCameraButton").objectReferenceValue = dash.CycleCameraButton;
                 hso.ApplyModifiedPropertiesWithoutUndo();
             }
 
@@ -776,7 +761,7 @@ namespace OmniBot.VR.Editor
             var tso = new SerializedObject(teleopCtl);
             tso.FindProperty("gestureDetector").objectReferenceValue = bootstrap.GetComponent<GestureDetector>();
             tso.FindProperty("handWorkspaceOrigin").objectReferenceValue = workspace.transform;
-            tso.FindProperty("cameraFeed").objectReferenceValue = cameraPage != null ? cameraPage.GetComponent<CameraFeedController>() : null;
+            tso.FindProperty("cameraFeed").objectReferenceValue = dash != null ? dash.SimFeedController : null;
             tso.FindProperty("recorder").objectReferenceValue = bootstrap.GetComponent<ProfileDrivenRecorder>();
             tso.ApplyModifiedPropertiesWithoutUndo();
 
@@ -879,6 +864,29 @@ namespace OmniBot.VR.Editor
             rt.pivot = new Vector2(min.x == max.x ? min.x : 0.5f, min.y == max.y ? min.y : 0.5f);
             rt.sizeDelta = size;
             rt.anchoredPosition = pos;
+        }
+
+        private static void FitInColumn(RectTransform rt, float preferredHeight)
+        {
+            rt.anchorMin = new Vector2(0f, 1f);
+            rt.anchorMax = new Vector2(1f, 1f);
+            rt.pivot = new Vector2(0.5f, 1f);
+            rt.sizeDelta = new Vector2(0f, preferredHeight);
+            var le = rt.GetComponent<LayoutElement>();
+            if (le == null) le = rt.gameObject.AddComponent<LayoutElement>();
+            le.preferredHeight = preferredHeight;
+            le.minHeight = preferredHeight;
+            le.flexibleWidth = 1f;
+        }
+
+        private static void PlaceColumnButton(Button button, float xMin, float xMax)
+        {
+            var rt = button.GetComponent<RectTransform>();
+            rt.anchorMin = new Vector2(xMin, 0f);
+            rt.anchorMax = new Vector2(xMax, 0f);
+            rt.pivot = new Vector2(0.5f, 0f);
+            rt.sizeDelta = new Vector2(-8f, 44f);
+            rt.anchoredPosition = new Vector2(0f, 6f);
         }
 
         private static void Place(RectTransform rt, Vector2 anchor, Vector2 size, Vector2 pos)

@@ -195,9 +195,11 @@ namespace OmniBot.VR.Control
         public IkLocation IkLocation;
 
         /// <summary>
-        /// Comma-separated policy ids used when serve <c>GET /models</c> is
-        /// unavailable. Mirrors a <c>policy_models</c> ROS param and the lerobot
-        /// registry (<c>act</c>, <c>smolvla</c>, <c>diffusion</c>, <c>openvla</c>).
+        /// Comma-separated policy ids, or a JSON model list, used when serve
+        /// <c>GET /models</c> is unavailable. Mirrors a <c>policy_models</c> ROS
+        /// param and the lerobot registry (<c>act</c>, <c>smolvla</c>,
+        /// <c>diffusion</c>, <c>openvla</c>). OmniBot's list is the ACT VR
+        /// sim-pick checkpoint.
         /// </summary>
         public string PolicyModelsFallback;
 

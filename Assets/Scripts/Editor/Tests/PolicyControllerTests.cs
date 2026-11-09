@@ -412,7 +412,48 @@ namespace OmniBot.VR.Tests
             Assert.AreEqual("/ohho/telemetry", profile.Topics.Telemetry);
             Assert.AreEqual("/ai/status", profile.Topics.AiStatus);
             Assert.AreEqual("/control_mode/active", profile.Topics.ControlModeActive);
-            Assert.AreEqual("act,smolvla,diffusion,openvla", profile.PolicyModelsFallback);
+            Assert.AreEqual(RobotProfileFactory.ActVrSimPickModels, profile.PolicyModelsFallback);
+        }
+
+        [Test]
+        public void Sim_LoadsStartsStopsAndMonitorsActVrCheckpoint()
+        {
+            RobotProfile profile = RobotProfileFactory.FromGarageRobot(OmniBot("omnibot"));
+            var link = new FakeLink();
+            var controller = new PolicyController();
+            controller.Bind(profile, link, PolicySessionKind.Sim);
+
+            Assert.IsTrue(controller.Select(RobotProfileFactory.ActVrSimPickId));
+            int loadMark = link.Published.Count;
+            PolicyCommandResult loaded = controller.Load();
+            Assert.IsTrue(loaded.Accepted, loaded.Reason);
+            Assert.AreEqual(RobotProfileFactory.ActVrSimPickCheckpoint, controller.LoadedCheckpoint);
+            Assert.AreEqual("/policy/load", link.Since(loadMark)[0].Topic);
+            Assert.AreEqual(
+                RobotProfileFactory.ActVrSimPickCheckpoint,
+                ((StringMsg)link.Since(loadMark)[0].Msg).data);
+
+            controller.Confirm();
+            PolicyCommandResult started = controller.Start();
+            Assert.IsTrue(started.Accepted, started.Reason);
+            Assert.AreEqual(PolicyRunState.Running, controller.RunState);
+            Assert.AreEqual("SIM — supervise not required", controller.FormatGate());
+
+            controller.IngestTelemetry(
+                "{\"v\":\"ohho.telemetry.v1\",\"kind\":\"sim\",\"deadman\":false,"
+                + "\"estop\":{\"active\":false,\"latched\":false,\"source\":\"none\"},"
+                + "\"policy\":{\"name\":\"act-vr-sim-pick\",\"state\":\"running\",\"latency_ms\":12.5,"
+                + "\"guards\":{\"black_frame\":0,\"stale_inference\":0,\"clamped_deltas\":1}}}");
+            Assert.AreEqual("act-vr-sim-pick", controller.Status.PolicyName);
+            Assert.AreEqual(12.5, controller.Status.LatencyMs);
+            Assert.IsTrue(controller.Status.Trips.HasClampedDeltas);
+            Assert.IsTrue(controller.FormatStatus().Contains("12.5"));
+
+            int stopMark = link.Published.Count;
+            controller.Stop();
+            Assert.AreEqual(PolicyRunState.Stopped, controller.RunState);
+            Assert.AreEqual("teleop", ((StringMsg)Message<StringMsg>(link.Since(stopMark), "/control_mode")).data);
+            Assert.IsFalse(((BoolMsg)Message<BoolMsg>(link.Since(stopMark), "/policy/enable")).data);
         }
 
         private static PolicyController Loaded(FakeLink link, PolicySessionKind kind)
@@ -551,6 +592,8 @@ namespace OmniBot.VR.Tests
             }
 
             public void Unsubscribe(string topic) { }
+
+            public void CallService(string service, string type, Action<bool, string> onResponse) { }
 
             public List<Pub> Since(int mark)
             {

@@ -24,6 +24,15 @@ namespace OmniBot.VR.Control
     /// </summary>
     public static class RobotProfileFactory
     {
+        /// <summary>Headset id for the OHH-243 ACT checkpoint. Matches the Python config.</summary>
+        public const string ActVrSimPickId = "act-vr-sim-pick";
+
+        /// <summary>Local checkpoint path passed to /policy/load and POST /load_model.</summary>
+        public const string ActVrSimPickCheckpoint = "checkpoints/act_vr_sim_pick/best";
+
+        public const string ActVrSimPickModels =
+            "[{\"id\":\"act-vr-sim-pick\",\"label\":\"ACT VR sim pick\",\"checkpoint\":\"checkpoints/act_vr_sim_pick/best\"}]";
+
         // SO-101 joint specs. Names, limits, link lengths, and kinematic zeros
         // are RobotDescriptor.So101. Homes add so101_joint_zeros.json offsets,
         // which ship as 0 until OHH-94 sets calibrated=true.
@@ -346,6 +355,7 @@ namespace OmniBot.VR.Control
                     p.Topics.ArmCommands = "/arm/joint_commands/teleop";
                     p.Topics.ArmEnable = "/arm/enable";
                     p.Topics.JointStates = "/arm/joint_states";
+                    p.PolicyModelsFallback = ActVrSimPickModels;
                     break;
                 case "so101-arm":
                     p.Joints = CreateSo101Joints();
@@ -589,6 +599,8 @@ namespace OmniBot.VR.Control
             target.Scan = catalog.Scan;
             target.GlobalCostmap = catalog.GlobalCostmap;
             target.LocalCostmap = catalog.LocalCostmap;
+            if (string.IsNullOrEmpty(target.Telemetry))
+                target.Telemetry = catalog.Telemetry;
             // Null means the catalog object never set the field. An explicit
             // empty string (no arm) still clears the descriptor default.
             if (catalog.ArmCmdMode != null) target.ArmCmdMode = catalog.ArmCmdMode;

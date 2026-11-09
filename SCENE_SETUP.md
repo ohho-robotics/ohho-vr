@@ -8,10 +8,12 @@
 > controller, and saves the scene.
 
 The app runs **one unified world-space screen** ("OhhO Screen", 1600×1000 at
-0.001 scale ≈ 1.6 m wide) floating 1.6 m in front of the user over
-passthrough. A `WorldSpaceUiPlacer` keeps it facing the user; the header bar
-(OhhO logo + ohho-robotics.com + Open Website button) is always visible, and
-the pages route inside it:
+0.001 scale ≈ 1.6 m wide) floating in front of the user over
+passthrough. Menus use a `WorldSpaceUiPlacer` (billboard on; comfort settings
+can change distance and size). The operate view locks that follow so the
+dashboard does not drift while driving; **Recentre** on the mode bar snaps it
+back to 1.6 m. The header bar (OhhO logo + ohho-robotics.com + Open Website
+button) stays on the menu screen, and the pages route inside the rig:
 
 ```
 ┌──────────────── OhhO Screen (one canvas, faces the user) ───────────────┐
@@ -21,7 +23,7 @@ the pages route inside it:
 │ Console page    → VR products from the manifest (today: OhhO Pilot)      │
 │ Garage page     → the user's robots (Supabase user_robots, shared w/web) │
 │ Session page    → Simulate (local / cloud / in-headset) or Drive real     │
-│ Teleop page     → connection + telemetry │ camera feed │ recording/export│
+│ Operate page    → mode/safety bar, telemetry, sim screen, arm, legend   │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -104,13 +106,21 @@ One persistent GameObject holding the platform services (each is a singleton):
 - **TeleopController wiring** — `gestureDetector`, `handWorkspaceOrigin`,
   `cameraFeed` (the teleop page's `CameraFeedController`), `recorder`.
 
-### 5a. Teleop page layout
+### 5a. Operate layout
 
-| Column | Contents |
+Shown by `OhhoVrApp.ShowTeleop()`. The side camera and controls canvases stay
+off; the feed and the legend are on this screen. Placement locks
+(`WorldSpaceUiPlacer` billboard and `SmoothHUD` follow) until you leave teleop.
+
+| Region | Contents |
 |---|---|
-| Left | Robot name, connection (IP/port/Connect/Disconnect/status dot), telemetry (pose, velocity, arm, mode), control hints, **< Garage** |
-| Center | Camera feed (`CameraFeedController` → WebRTC when signaling answers, else MJPEG), camera name and transport, **Next Camera** |
-| Right | Dataset recording (Start / Stop & Save / Discard, live status), **Export to Robot** (POSTs JSONL to the VR bridge at `:8765`) |
+| Top | SIM/REAL, mode, e-stop, deadman, link. Actions: Teleop, Nav2, Policy (confirm), Record, E-Stop (latched), Reset, Recentre |
+| Left | Robot name, connection (IP/port/Connect/Disconnect/status dot), telemetry (pose, velocity, arm, mode), heartbeat safety strip (state, Reset e-stop, Confirm reset), expanded telemetry, drive/arm hints |
+| Centre | Curved sim screen (`CameraFeedController` + `SimScreenPresenter`: chase / front / wrist / BEV, wrist PiP, WebRTC with MJPEG fallback), camera name and transport, **Next Camera**. A real session keeps the flat camera on this slot. BEV is one of those cameras. The same topic is also a world-space floor quad (`BevFloorPanel`) under `OmniBotTwin` / `TwinView` when that twin is in the scene. The quad is created at teleop start, not saved in `scene1`. |
+| Right | Arm joint readouts, dataset recording (Start / Stop & Save / Discard, live status), **Export to Robot** (POSTs JSONL to the VR bridge at `:8765`) |
+| Bottom | Controls legend, **< Garage** |
+
+Body text is at least 0.9° at 1.6 m (canvas scale 0.001) and uses near-white on a near-opaque dark panel so it stays readable in bright passthrough. Grip e-stop, the operate-bar latch, the heartbeat watchdog, and the deadman re-press all stay in force.
 
 ---
 
@@ -127,8 +137,9 @@ One persistent GameObject holding the platform services (each is a singleton):
    notice (and the deadman tutorial the first time) before an announced robot
    or a manual IP. `OhhoVrApp` then builds the `RobotProfile` and hands it to
    `TeleopController`. The teleop page opens with a blue **SIM** or orange **REAL** banner.
-   - **Base:** left stick strafe (vx/vy), right stick X yaw, right grip turbo,
-     both grips e-stop.
+   - **Base:** left stick strafe (vx/vy), right stick X yaw, hold one grip to
+     drive (deadman, on by default), right grip turbo clamped to 0.2 m/s,
+     both grips latched e-stop (left X resets; releasing the grips does not).
    - **Arm:** Left X requests enable (a real robot needs a second Left X
      before `/arm/enable`). A left-hand thumbs-up (hold 0.5 s) requests enable
      or turns the arm off and never confirms a real robot. Hold the right index

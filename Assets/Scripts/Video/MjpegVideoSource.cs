@@ -1,39 +1,65 @@
 using System;
 using System.Collections;
-using System.Text;
+using System.Threading;
 using UnityEngine;
 using UnityEngine.Networking;
+using OmniBot.VR.Latency;
 
 namespace OmniBot.VR.Video
 {
     /// <summary>
-    /// MJPEG video source — streams JPEG frames from <c>web_video_server</c>
-    /// over HTTP multipart/x-mixed-replace. Extracted from the legacy
-    /// <c>CameraFeedViewer</c> so the transport is decoupled from the UI and
-    /// swappable with <see cref="WebRtcVideoSource"/>. Parses Content-Length
-    /// headers with a JPEG-marker (FF D8 … FF D9) fallback, loads each frame into
-    /// a reusable <see cref="Texture2D"/> via <c>ImageConversion.LoadImage</c>.
-    ///
-    /// This is the fallback source when WebRTC signaling or the decoder is
-    /// unavailable. It has ~200–500 ms latency. WebRTC is the low-latency path.
+    /// MJPEG from <c>web_video_server</c> over HTTP multipart/x-mixed-replace.
+    /// Extracted from the legacy <c>CameraFeedViewer</c> so the transport is
+    /// decoupled from the UI and swappable with <see cref="WebRtcVideoSource"/>.
+    /// Bytes are parsed on the main thread; baseline JPEG decode runs on a
+    /// worker. The main thread only uploads the latest RGB buffer
+    /// (<see cref="Texture2D.LoadRawTextureData"/>). Frames are capped at
+    /// <see cref="FramePacer.MaxFps"/>. <see cref="JpegQuality"/> and
+    /// <see cref="JpegWidth"/> are sent as <c>quality</c> and <c>width</c>.
+    /// This is the fallback when WebRTC signaling or the decoder is unavailable.
     /// </summary>
     public sealed class MjpegVideoSource : IVideoSource
     {
         private const float NoSignalTimeout = 5f;
-        private const int BoundarySearchSize = 512;
-        private const int WebVideoServerPort = 8080;
 
         public string TransportName => "MJPEG";
         public bool IsStreaming => _coroutine != null;
+
+        /// <summary>Unix ms from an <c>OHHO_CAP:</c> marker on the latest frame, if present.</summary>
+        public long? LastCaptureUnixMs { get; private set; }
         public event Action<Texture2D> OnFrame;
         public event Action<string> OnError;
 
+        public int JpegQuality = SimScreenCameras.MainQuality;
+        public int JpegWidth = SimScreenCameras.MainWidth;
+
+        /// <summary>Realtime clock when the JPEG now on screen was pulled from the socket.</summary>
+        public double LastFrameReceivedAt { get; private set; }
+
+        public bool HasPresentedFrame { get; private set; }
+
         private readonly MonoBehaviour _host;
+        private readonly BaselineJpegDecoder _decoder = new BaselineJpegDecoder();
+        private readonly object _gate = new object();
+        private readonly DecodeJob _job = new DecodeJob();
+        private static readonly WaitCallback DecodeCallback = OnDecode;
         private Coroutine _coroutine;
         private Texture2D _texture;
+        private byte[] _workerRgb;
+        private byte[] _jpegSlot;
+        private byte[] _pending;
+        private byte[] _upload;
+        private int _pendingW;
+        private int _pendingH;
+        private double _pendingAt;
+        private bool _hasPending;
+        private long? _pendingCaptureUnixMs;
+        private bool _pendingCaptureEnabled;
+        private bool _decodeBusy;
         private bool _disposed;
+        private volatile int _generation;
+        private double _lastSubmit = -1;
 
-        /// <param name="host">A MonoBehaviour to host the streaming coroutine.</param>
         public MjpegVideoSource(MonoBehaviour host)
         {
             _host = host;
@@ -41,20 +67,30 @@ namespace OmniBot.VR.Video
 
         public void Start(string robotIp, string topic)
         {
-            string encoded = Uri.EscapeUriString(topic ?? "");
-            StartUrl($"http://{robotIp}:{WebVideoServerPort}/stream?topic={encoded}");
+            StartUrl(MjpegUrl.Build(robotIp, MjpegUrl.Port, topic, JpegQuality, JpegWidth));
         }
 
-        /// <summary>Stream an absolute MJPEG URL from a session endpoint.</summary>
         public void StartUrl(string url)
         {
             Stop();
             if (string.IsNullOrEmpty(url) || _host == null) return;
-            _coroutine = _host.StartCoroutine(StreamMjpeg(url));
+            url = MjpegUrl.WithParams(url, JpegQuality, JpegWidth);
+            _lastSubmit = -1;
+            HasPresentedFrame = false;
+            _coroutine = _host.StartCoroutine(Stream(url, _generation));
         }
 
         public void Stop()
         {
+            lock (_gate)
+            {
+                _generation++;
+                // Leave _decodeBusy set. The worker clears it when it finishes
+                // reading _jpegSlot, so a new stream cannot overwrite that buffer
+                // mid-decode. There is only one slot.
+                _hasPending = false;
+            }
+            _lastSubmit = -1;
             if (_coroutine != null && _host != null)
             {
                 _host.StopCoroutine(_coroutine);
@@ -69,145 +105,209 @@ namespace OmniBot.VR.Video
         public void Dispose()
         {
             Stop();
+            _disposed = true;
             if (_texture != null)
             {
                 UnityEngine.Object.Destroy(_texture);
                 _texture = null;
             }
-            _disposed = true;
         }
 
-        // ── MJPEG streaming coroutine (ported from CameraFeedViewer) ─────────────
-
-        private IEnumerator StreamMjpeg(string url)
+        private IEnumerator Stream(string url, int generation)
         {
-            float noSignalTimer = 0f;
-            bool gotFirstFrame = false;
-
-            while (!_disposed)
+            while (!_disposed && generation == _generation)
             {
-                byte[] receiveBuffer = new byte[256 * 1024];
-                int bufferFill = 0;
+                var buffer = new MjpegChunkBuffer();
+                var handler = new MjpegDownloadHandler();
+                float silent = 0f;
+                bool signaled = false;
+                handler.OnBytes = (bytes, n) =>
+                {
+                    if (generation != _generation) return;
+                    buffer.Append(bytes, n, (frame, offset, length) => Submit(frame, offset, length, generation));
+                };
 
                 using (var req = new UnityWebRequest(url, UnityWebRequest.kHttpVerbGET))
                 {
-                    req.downloadHandler = new DownloadHandlerBuffer();
+                    req.downloadHandler = handler;
                     req.SetRequestHeader("Accept", "multipart/x-mixed-replace");
-                    req.timeout = 10;
+                    req.timeout = 0;
                     req.SendWebRequest();
 
-                    while (!req.isDone && !_disposed)
+                    while (!req.isDone && !_disposed && generation == _generation)
                     {
-                        byte[] data = req.downloadHandler.data;
-                        if (data != null && data.Length > bufferFill)
+                        PumpUpload();
+                        if (!HasPresentedFrame)
                         {
-                            int newBytes = data.Length - bufferFill;
-                            int copyLen = Mathf.Min(newBytes, receiveBuffer.Length - bufferFill);
-                            if (copyLen > 0)
+                            silent += Time.unscaledDeltaTime;
+                            if (silent > NoSignalTimeout && !signaled)
                             {
-                                Buffer.BlockCopy(data, bufferFill, receiveBuffer, bufferFill, copyLen);
-                                bufferFill += copyLen;
-                            }
-
-                            int consumed = 0;
-                            while (TryExtractJpeg(receiveBuffer, bufferFill, consumed, out int frameStart, out int frameLen))
-                            {
-                                byte[] jpegBytes = new byte[frameLen];
-                                Buffer.BlockCopy(receiveBuffer, frameStart, jpegBytes, 0, frameLen);
-                                LoadTexture(jpegBytes);
-                                gotFirstFrame = true;
-                                noSignalTimer = 0f;
-                                consumed = frameStart + frameLen;
-                            }
-
-                            if (consumed > 0 && consumed < bufferFill)
-                            {
-                                Buffer.BlockCopy(receiveBuffer, consumed, receiveBuffer, 0, bufferFill - consumed);
-                                bufferFill -= consumed;
-                            }
-                            else if (consumed >= bufferFill)
-                            {
-                                bufferFill = 0;
+                                signaled = true;
+                                OnError?.Invoke("No signal");
                             }
                         }
-
-                        noSignalTimer += Time.deltaTime;
-                        if (noSignalTimer > NoSignalTimeout && !gotFirstFrame)
-                            OnError?.Invoke("No signal");
-
                         yield return null;
                     }
+                    PumpUpload();
 
-                    if (req.result != UnityWebRequest.Result.Success)
-                    {
-                        OnError?.Invoke($"Stream error: {req.error}");
-                    }
+                    if (!_disposed && generation == _generation && req.result != UnityWebRequest.Result.Success)
+                        OnError?.Invoke("Stream error: " + req.error);
                 }
 
-                if (_disposed) break;
-                yield return new WaitForSeconds(2f);
-                bufferFill = 0;
+                handler.OnBytes = null;
+                if (_disposed || generation != _generation) break;
+
+                float wait = 0f;
+                while (wait < 2f && !_disposed && generation == _generation)
+                {
+                    PumpUpload();
+                    wait += Time.unscaledDeltaTime;
+                    yield return null;
+                }
             }
         }
 
-        private void LoadTexture(byte[] jpegBytes)
+        private void Submit(byte[] src, int offset, int length, int generation)
+        {
+            if (_disposed || generation != _generation || length <= 0) return;
+            double now = Time.realtimeSinceStartupAsDouble;
+            if (!FramePacer.ShouldTake(_lastSubmit, now)) return;
+            byte[] jpeg;
+            lock (_gate)
+            {
+                if (_decodeBusy || generation != _generation) return;
+                _decodeBusy = true;
+                _lastSubmit = now;
+                jpeg = ByteScratch.Ensure(ref _jpegSlot, length);
+                Buffer.BlockCopy(src, offset, jpeg, 0, length);
+                _job.Owner = this;
+                _job.Buffer = jpeg;
+                _job.Length = length;
+                _job.Generation = generation;
+                _job.ReceivedAt = now;
+            }
+
+            try
+            {
+                ThreadPool.QueueUserWorkItem(DecodeCallback, _job);
+            }
+            catch
+            {
+                lock (_gate)
+                {
+                    if (generation == _generation) _decodeBusy = false;
+                }
+                throw;
+            }
+        }
+
+        private static void OnDecode(object state)
+        {
+            var job = (DecodeJob)state;
+            job.Owner.DecodeWorker(job.Buffer, job.Length, job.Generation, job.ReceivedAt);
+        }
+
+        private void DecodeWorker(byte[] jpeg, int length, int generation, double receivedAt)
+        {
+            try
+            {
+                if (generation != _generation || _disposed) return;
+                byte[] rgb = _workerRgb;
+                if (!_decoder.TryDecode(jpeg, length, ref rgb, out int w, out int h, out _))
+                    return;
+                _workerRgb = rgb;
+                if (generation != _generation || _disposed) return;
+                bool captureEnabled = LatencyCapture.IsEnabled;
+                long? captureUnixMs = captureEnabled ? JpegCaptureStamp.TryReadUnixMs(jpeg) : null;
+                int bytes = w * h * 3;
+                lock (_gate)
+                {
+                    if (generation != _generation || _disposed) return;
+                    ByteScratch.Ensure(ref _pending, bytes);
+                    Buffer.BlockCopy(rgb, 0, _pending, 0, bytes);
+                    _pendingW = w;
+                    _pendingH = h;
+                    _pendingAt = receivedAt;
+                    _pendingCaptureEnabled = captureEnabled;
+                    _pendingCaptureUnixMs = captureUnixMs;
+                    _hasPending = true;
+                }
+            }
+            finally
+            {
+                lock (_gate)
+                {
+                    _decodeBusy = false;
+                }
+            }
+        }
+
+        private void PumpUpload()
         {
             if (_disposed) return;
-            if (_texture == null)
-                _texture = new Texture2D(2, 2, TextureFormat.RGB24, false);
+            byte[] pending;
+            int w;
+            int h;
+            double at;
+            long? captureUnixMs;
+            bool captureEnabled;
+            lock (_gate)
+            {
+                if (!_hasPending || _pending == null) return;
+                w = _pendingW;
+                h = _pendingH;
+                at = _pendingAt;
+                captureUnixMs = _pendingCaptureUnixMs;
+                captureEnabled = _pendingCaptureEnabled;
+                int bytes = w * h * 3;
+                // LoadRawTextureData(byte[]) requires the array length to match the texture.
+                if (_upload == null || _upload.Length != bytes) _upload = new byte[bytes];
+                BaselineJpegDecoder.FlipVertical(_pending, _upload, w, h);
+                pending = _upload;
+                _hasPending = false;
+            }
 
-            if (ImageConversion.LoadImage(_texture, jpegBytes, false))
-                OnFrame?.Invoke(_texture);
+            if (LatencyCapture.IsEnabled && captureEnabled)
+                LastCaptureUnixMs = captureUnixMs;
+            else
+                LastCaptureUnixMs = null;
+
+            if (_texture == null || _texture.width != w || _texture.height != h)
+            {
+                if (_texture != null) UnityEngine.Object.Destroy(_texture);
+                // linear:false marks the JPEG as sRGB so the linear Quest framebuffer converts it.
+                _texture = new Texture2D(w, h, TextureFormat.RGB24, false, false);
+                _texture.wrapMode = TextureWrapMode.Clamp;
+                _texture.filterMode = FilterMode.Bilinear;
+            }
+            _texture.LoadRawTextureData(pending);
+            _texture.Apply(false, false);
+            LastFrameReceivedAt = at;
+            HasPresentedFrame = true;
+            OnFrame?.Invoke(_texture);
         }
 
-        // ── JPEG frame extraction (ported from CameraFeedViewer) ─────────────────
-
-        private static bool TryExtractJpeg(byte[] buf, int len, int offset, out int frameStart, out int frameLen)
+        private sealed class DecodeJob
         {
-            frameStart = 0;
-            frameLen = 0;
-            if (len - offset < 4) return false;
+            public MjpegVideoSource Owner;
+            public byte[] Buffer;
+            public int Length;
+            public int Generation;
+            public double ReceivedAt;
+        }
 
-            string header = Encoding.ASCII.GetString(buf, offset, Mathf.Min(BoundarySearchSize, len - offset));
-            int clIdx = header.IndexOf("Content-Length:", StringComparison.OrdinalIgnoreCase);
-            if (clIdx >= 0)
-            {
-                int eolIdx = header.IndexOf("\r\n\r\n", clIdx);
-                if (eolIdx >= 0)
-                {
-                    int headerEnd = offset + eolIdx + 4;
-                    int clEnd = header.IndexOf('\r', clIdx + 15);
-                    if (clEnd < 0) clEnd = header.IndexOf('\n', clIdx + 15);
-                    if (clEnd > 0)
-                    {
-                        string clStr = header.Substring(clIdx + 15, clEnd - (clIdx + 15)).Trim();
-                        if (int.TryParse(clStr, out int contentLen) && headerEnd + contentLen <= len)
-                        {
-                            frameStart = headerEnd;
-                            frameLen = contentLen;
-                            return true;
-                        }
-                    }
-                }
-            }
+        private sealed class MjpegDownloadHandler : DownloadHandlerScript
+        {
+            public Action<byte[], int> OnBytes;
 
-            for (int i = offset; i < len - 1; i++)
+            public MjpegDownloadHandler() : base(new byte[16 * 1024]) { }
+
+            protected override bool ReceiveData(byte[] data, int dataLength)
             {
-                if (buf[i] == 0xFF && buf[i + 1] == 0xD8)
-                {
-                    for (int j = i + 2; j < len - 1; j++)
-                    {
-                        if (buf[j] == 0xFF && buf[j + 1] == 0xD9)
-                        {
-                            frameStart = i;
-                            frameLen = j + 2 - i;
-                            return true;
-                        }
-                    }
-                    break;
-                }
+                if (data != null && dataLength > 0 && OnBytes != null)
+                    OnBytes(data, dataLength);
+                return true;
             }
-            return false;
         }
     }
 }

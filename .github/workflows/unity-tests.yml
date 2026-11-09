@@ -1,11 +1,20 @@
-name: Unity tests
+name: Unity tests and Quest APK build
 
 on:
   push:
     branches:
       - main
+      - 'ohh-*'
   pull_request:
   workflow_dispatch:
+
+# push to an open ohh-* PR also matches pull_request. One group per branch
+# cancels the stale run instead of starting a second Unity test and APK build.
+# Head repository is part of the key so two fork PRs that share a branch name
+# do not cancel each other. Pushes have no pull_request head and use this repo.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -85,7 +94,7 @@ jobs:
           artifactsPath: test-results
           # Unity 6000.5 batchmode on a runner with no audio device disables the
           # enhanced audio foundation's realtime thread while a mix is still
-          # running, then aborts:
+          # running, then aborts before editmode-results.xml exists:
           # ADTM: Attempting to update control while a mix is ongoing, but
           # realtime thread is disabled will lead to a deadlock.
           # -enhancedAudioFoundation 0 keeps classic audio for this editor

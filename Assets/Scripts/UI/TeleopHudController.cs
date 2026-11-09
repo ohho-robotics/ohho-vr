@@ -9,6 +9,7 @@ using OmniBot.VR.Control;
 using OmniBot.VR.Core;
 using OmniBot.VR.Recording;
 using OmniBot.VR.Telemetry;
+using OmniBot.VR.UI.Operate;
 
 namespace OmniBot.VR.UI
 {
@@ -67,6 +68,12 @@ namespace OmniBot.VR.UI
         [SerializeField] private TMP_Text hintsText;
         [SerializeField] private Button backButton;
 
+        [Header("Safety (OHH-202)")]
+        [SerializeField] private Image safetyBanner;
+        [SerializeField] private TMP_Text safetyStatusText;
+        [SerializeField] private Button estopResetButton;
+        [SerializeField] private Button estopConfirmButton;
+
         // ── State ─────────────────────────────────────────────────────────────
         private App.OhhoVrApp _app;
         private Control.TeleopController _teleop;
@@ -97,6 +104,13 @@ namespace OmniBot.VR.UI
         private static readonly Color DisconnectedColor = new Color(0.85f, 0.25f, 0.25f);
         private static readonly Color RecordingColor = new Color(1f, 0.2f, 0.2f);
         private static readonly Color IdleDotColor = new Color(0.45f, 0.45f, 0.5f);
+        private static readonly Color ArmedColor = new Color(0.12f, 0.45f, 0.28f, 0.96f);
+        private static readonly Color LatchedColor = new Color(0.75f, 0.12f, 0.12f, 0.98f);
+        private static readonly Color DisarmedColor = new Color(0.55f, 0.38f, 0.08f, 0.96f);
+        private static readonly Color SafetyIdleColor = new Color(0.12f, 0.14f, 0.2f, 0.94f);
+
+        private TMP_Text _resetLabel;
+        private TMP_Text _confirmLabel;
 
         // OmniBot catalog names used only when the active profile leaves a field blank.
         // A descriptor-built profile replaces these whenever it names the topic.
@@ -116,6 +130,7 @@ namespace OmniBot.VR.UI
 
         private void OnEnable()
         {
+            EnsureSafetyWidgets();
             if (connectButton != null) connectButton.onClick.AddListener(OnConnectClicked);
             if (disconnectButton != null) disconnectButton.onClick.AddListener(OnDisconnectClicked);
             if (cycleCameraButton != null) cycleCameraButton.onClick.AddListener(OnCycleCamera);
@@ -124,6 +139,8 @@ namespace OmniBot.VR.UI
             if (discardButton != null) discardButton.onClick.AddListener(OnDiscard);
             if (exportButton != null) exportButton.onClick.AddListener(OnExportAll);
             if (backButton != null) backButton.onClick.AddListener(OnBack);
+            if (estopResetButton != null) estopResetButton.onClick.AddListener(OnEstopResetClicked);
+            if (estopConfirmButton != null) estopConfirmButton.onClick.AddListener(OnEstopConfirmClicked);
             EnsureTelemetryWidgets();
             if (telemetryModeButton != null) telemetryModeButton.onClick.AddListener(OnTelemetryMode);
 
@@ -157,6 +174,8 @@ namespace OmniBot.VR.UI
             if (discardButton != null) discardButton.onClick.RemoveListener(OnDiscard);
             if (exportButton != null) exportButton.onClick.RemoveListener(OnExportAll);
             if (backButton != null) backButton.onClick.RemoveListener(OnBack);
+            if (estopResetButton != null) estopResetButton.onClick.RemoveListener(OnEstopResetClicked);
+            if (estopConfirmButton != null) estopConfirmButton.onClick.RemoveListener(OnEstopConfirmClicked);
             if (telemetryModeButton != null) telemetryModeButton.onClick.RemoveListener(OnTelemetryMode);
 
             var conn = ConnectionManager.Instance;
@@ -191,7 +210,7 @@ namespace OmniBot.VR.UI
                     cameraFeed.CurrentCameraTopic,
                     now);
             }
-
+            RefreshSafetyUi();
             ApplyHardCaps();
             if (!_composer.ConsumeFrame(Time.unscaledDeltaTime, now)) return;
             EnsureSubscriptions();
@@ -526,17 +545,45 @@ namespace OmniBot.VR.UI
             return true;
         }
 
+        private RectTransform OperateTelemetryColumn()
+        {
+            var dash = GetComponent<OperateDashboard>();
+            if (dash == null) return null;
+            return dash.transform.Find("Telemetry Column") as RectTransform;
+        }
+
+        private static void FitColumnChild(RectTransform rt, float preferredHeight)
+        {
+            rt.anchorMin = new Vector2(0f, 1f);
+            rt.anchorMax = new Vector2(1f, 1f);
+            rt.pivot = new Vector2(0.5f, 1f);
+            rt.sizeDelta = new Vector2(0f, preferredHeight);
+            var le = rt.GetComponent<LayoutElement>();
+            if (le == null) le = rt.gameObject.AddComponent<LayoutElement>();
+            le.preferredHeight = preferredHeight;
+            le.minHeight = preferredHeight;
+            le.flexibleWidth = 1f;
+        }
+
         private void EnsureTelemetryWidgets()
         {
             if (telemetryBody != null) return;
+            var column = OperateTelemetryColumn();
             var panel = new GameObject("Telemetry V2", typeof(RectTransform));
-            panel.transform.SetParent(transform, false);
+            panel.transform.SetParent(column != null ? column : transform, false);
             var panelRt = (RectTransform)panel.transform;
-            panelRt.anchorMin = new Vector2(0.5f, 0.5f);
-            panelRt.anchorMax = new Vector2(0.5f, 0.5f);
-            panelRt.pivot = new Vector2(0.5f, 0.5f);
-            panelRt.sizeDelta = new Vector2(680f, 860f);
-            panelRt.anchoredPosition = new Vector2(40f, 0f);
+            if (column != null)
+            {
+                FitColumnChild(panelRt, 180f);
+            }
+            else
+            {
+                panelRt.anchorMin = new Vector2(0.5f, 0.5f);
+                panelRt.anchorMax = new Vector2(0.5f, 0.5f);
+                panelRt.pivot = new Vector2(0.5f, 0.5f);
+                panelRt.sizeDelta = new Vector2(680f, 860f);
+                panelRt.anchoredPosition = new Vector2(40f, 0f);
+            }
             var bg = panel.AddComponent<Image>();
             bg.color = new Color(0.04f, 0.06f, 0.10f, 0.94f);
 
@@ -731,6 +778,181 @@ namespace OmniBot.VR.UI
         private void OnBack()
         {
             if (_app != null) _app.StopTeleopAndReturnToGarage();
+        }
+
+        // ── Safety state + e-stop reset ───────────────────────────────────────
+
+        private void OnEstopResetClicked()
+        {
+            if (_teleop == null) _teleop = FindObjectOfType<Control.TeleopController>();
+            _teleop?.RequestEstopReset();
+            RefreshSafetyUi();
+        }
+
+        private void OnEstopConfirmClicked()
+        {
+            if (_teleop == null) _teleop = FindObjectOfType<Control.TeleopController>();
+            _teleop?.ConfirmEstopReset();
+            RefreshSafetyUi();
+        }
+
+        private void RefreshSafetyUi()
+        {
+            var safety = _teleop != null ? _teleop.Safety : null;
+            string line = safety != null ? safety.StatusLine : "SAFETY — no session";
+            if (safetyStatusText != null)
+            {
+                safetyStatusText.text = line;
+                safetyStatusText.fontStyle = FontStyles.Bold;
+            }
+
+            bool latched = safety != null && safety.Latched;
+            bool pending = safety != null && safety.ResetConfirmPending;
+            bool linked = safety != null && safety.LinkConnected;
+            if (safetyBanner != null)
+            {
+                if (latched) safetyBanner.color = LatchedColor;
+                else if (safety != null && safety.StateKnown && safety.Armed) safetyBanner.color = ArmedColor;
+                else if (safety != null && safety.StateKnown) safetyBanner.color = DisarmedColor;
+                else safetyBanner.color = SafetyIdleColor;
+            }
+
+            if (estopResetButton != null) estopResetButton.interactable = latched && linked;
+            if (_resetLabel != null) _resetLabel.text = pending ? "Reset armed" : "Reset e-stop";
+            if (estopConfirmButton != null)
+            {
+                estopConfirmButton.gameObject.SetActive(pending);
+                estopConfirmButton.interactable = pending && latched && linked;
+            }
+        }
+
+        /// <summary>
+        /// The shipped scene predates the safety strip. Build it when the
+        /// serialized widgets were not assigned so the latch is visible without
+        /// a scene rebuild.
+        /// </summary>
+        private void EnsureSafetyWidgets()
+        {
+            if (safetyStatusText != null && estopResetButton != null && estopConfirmButton != null)
+            {
+                _resetLabel = estopResetButton.GetComponentInChildren<TMP_Text>();
+                _confirmLabel = estopConfirmButton.GetComponentInChildren<TMP_Text>();
+                return;
+            }
+
+            TMP_FontAsset font = connectionStatusText != null ? connectionStatusText.font : null;
+            Sprite uiSprite = connectButton != null ? connectButton.GetComponent<Image>()?.sprite : null;
+            if (uiSprite == null && connectionDot != null) uiSprite = connectionDot.sprite;
+
+            var column = OperateTelemetryColumn();
+            var bannerGo = new GameObject("Safety Banner", typeof(RectTransform));
+            bannerGo.transform.SetParent(column != null ? column : transform, false);
+            var bannerRt = (RectTransform)bannerGo.transform;
+            if (column != null)
+            {
+                bannerGo.transform.SetAsFirstSibling();
+                FitColumnChild(bannerRt, 132f);
+            }
+            else
+            {
+                bannerGo.transform.SetAsLastSibling();
+                bannerRt.anchorMin = new Vector2(0.5f, 1f);
+                bannerRt.anchorMax = new Vector2(0.5f, 1f);
+                bannerRt.pivot = new Vector2(0.5f, 1f);
+                bannerRt.sizeDelta = new Vector2(980f, 88f);
+                bannerRt.anchoredPosition = new Vector2(0f, -12f);
+            }
+            safetyBanner = bannerGo.AddComponent<Image>();
+            safetyBanner.sprite = uiSprite;
+            safetyBanner.color = SafetyIdleColor;
+
+            safetyStatusText = CreateLabel("Safety Status", bannerGo.transform, font, column != null ? 20 : 28, TextAlignmentOptions.MidlineLeft);
+            var statusRt = safetyStatusText.rectTransform;
+            if (column != null)
+            {
+                statusRt.anchorMin = new Vector2(0f, 1f);
+                statusRt.anchorMax = new Vector2(1f, 1f);
+                statusRt.pivot = new Vector2(0.5f, 1f);
+                statusRt.sizeDelta = new Vector2(-16f, 36f);
+                statusRt.anchoredPosition = new Vector2(0f, -6f);
+            }
+            else
+            {
+                statusRt.anchorMin = new Vector2(0f, 0f);
+                statusRt.anchorMax = new Vector2(0f, 1f);
+                statusRt.pivot = new Vector2(0f, 0.5f);
+                statusRt.sizeDelta = new Vector2(560f, 0f);
+                statusRt.anchoredPosition = new Vector2(20f, 0f);
+            }
+            safetyStatusText.text = "SAFETY";
+
+            estopResetButton = CreateHudButton("E-Stop Reset", bannerGo.transform, font, uiSprite, "Reset e-stop", LatchedColor, out _resetLabel);
+            estopConfirmButton = CreateHudButton("E-Stop Confirm", bannerGo.transform, font, uiSprite, "Confirm reset", new Color(0.95f, 0.85f, 0.2f), out _confirmLabel);
+            if (column != null)
+            {
+                PlaceOperateSafetyButton(estopResetButton, 0.02f, 0.49f);
+                PlaceOperateSafetyButton(estopConfirmButton, 0.51f, 0.98f);
+            }
+            else
+            {
+                PlaceHudButton(estopResetButton, new Vector2(-280f, 0f));
+                PlaceHudButton(estopConfirmButton, new Vector2(-40f, 0f));
+            }
+            if (_confirmLabel != null) _confirmLabel.color = Color.black;
+            estopConfirmButton.gameObject.SetActive(false);
+        }
+
+        private static TMP_Text CreateLabel(string name, Transform parent, TMP_FontAsset font, float size, TextAlignmentOptions align)
+        {
+            var go = new GameObject(name, typeof(RectTransform));
+            go.transform.SetParent(parent, false);
+            var tmp = go.AddComponent<TextMeshProUGUI>();
+            if (font != null) tmp.font = font;
+            tmp.fontSize = size;
+            tmp.color = Color.white;
+            tmp.alignment = align;
+            tmp.enableWordWrapping = false;
+            tmp.raycastTarget = false;
+            return tmp;
+        }
+
+        private static Button CreateHudButton(string name, Transform parent, TMP_FontAsset font, Sprite sprite, string label, Color bg, out TMP_Text labelText)
+        {
+            var go = new GameObject(name, typeof(RectTransform));
+            go.transform.SetParent(parent, false);
+            var img = go.AddComponent<Image>();
+            img.sprite = sprite;
+            img.color = bg;
+            var btn = go.AddComponent<Button>();
+            btn.targetGraphic = img;
+            labelText = CreateLabel("Text", go.transform, font, 22, TextAlignmentOptions.Center);
+            var rt = labelText.rectTransform;
+            rt.anchorMin = Vector2.zero;
+            rt.anchorMax = Vector2.one;
+            rt.offsetMin = Vector2.zero;
+            rt.offsetMax = Vector2.zero;
+            labelText.text = label;
+            return btn;
+        }
+
+        private static void PlaceOperateSafetyButton(Button button, float xMin, float xMax)
+        {
+            var rt = (RectTransform)button.transform;
+            rt.anchorMin = new Vector2(xMin, 0f);
+            rt.anchorMax = new Vector2(xMax, 0f);
+            rt.pivot = new Vector2(0.5f, 0f);
+            rt.sizeDelta = new Vector2(-8f, 44f);
+            rt.anchoredPosition = new Vector2(0f, 6f);
+        }
+
+        private static void PlaceHudButton(Button button, Vector2 anchoredPos)
+        {
+            var rt = (RectTransform)button.transform;
+            rt.anchorMin = new Vector2(1f, 0.5f);
+            rt.anchorMax = new Vector2(1f, 0.5f);
+            rt.pivot = new Vector2(1f, 0.5f);
+            rt.sizeDelta = new Vector2(220f, 56f);
+            rt.anchoredPosition = anchoredPos;
         }
     }
 }
