@@ -24,7 +24,7 @@ namespace OmniBot.VR.Control
     /// Manipulation dispatch:
     /// <list type="bullet">
     /// <item>6-DOF arm (SO-101, UR5e) → <see cref="HandIK6DofScheme"/></item>
-    /// <item>Dual-arm humanoids (armDof ≥ 7, two hands) → <see cref="DualArmManipulationScheme"/></item>
+    /// <item>Descriptor <c>manipulation.dual_arm</c> (each arm's own joints) or catalog armDof ≥ 7 → <see cref="DualArmManipulationScheme"/></item>
     /// <item>1-DOF gripper-only → <see cref="GripperOnlyScheme"/></item>
     /// <item>No arm → null (manipulation layer absent)</item>
     /// </list>
@@ -110,7 +110,8 @@ namespace OmniBot.VR.Control
             if (fromDescriptor && !CapabilitySchemes.AllowsManipulation(profile.Capabilities))
                 return null;
 
-            // Dual-arm is a capability (or two arms already folded into ArmDof >= 7).
+            // manipulation.dual_arm. Joints is every arm concatenated; the scheme
+            // publishes LeftArmJoint* / RightArmJoint* under those joint names.
             if (fromDescriptor && profile.Capabilities.DualArm && profile.ArmDof >= 2)
             {
                 var dual = new DualArmManipulationScheme();

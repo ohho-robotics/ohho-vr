@@ -191,6 +191,17 @@ namespace OmniBot.VR.Control
         /// <summary>True if this is a dual-arm humanoid (two arms driven by two hands).</summary>
         public bool IsDualArm;
 
+        /// <summary>
+        /// Spans of <see cref="Joints"/> for a dual-arm descriptor. Counts stay 0
+        /// on the catalog path, where <see cref="Joints"/> is one arm and the
+        /// dual-arm scheme mirrors it with <c>r_</c>/<c>l_</c> names. A descriptor
+        /// publishes the joints in each span under their own names.
+        /// </summary>
+        public int LeftArmJointOffset;
+        public int LeftArmJointCount;
+        public int RightArmJointOffset;
+        public int RightArmJointCount;
+
         // ── IK location (Phase 4) ──────────────────────────────────────────────
         /// <summary>
         /// Where inverse kinematics is solved. <c>Headset</c> = solve in Unity,

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Newtonsoft.Json.Linq;
 using OmniBot.VR.Core;
 using OmniBot.VR.Core.Platform;
 using OmniBot.VR.Mapping;
@@ -142,6 +143,16 @@ namespace OmniBot.VR.Control
                 joints = IntersectJoints(joints, catalogFallback.HardJoints);
             }
 
+            int leftArmOffset = 0;
+            int leftArmCount = 0;
+            int rightArmOffset = 0;
+            int rightArmCount = 0;
+            if (capabilities.DualArm)
+            {
+                TrySplitDualArms(descriptor, joints,
+                    out leftArmOffset, out leftArmCount, out rightArmOffset, out rightArmCount);
+            }
+
             var spec = DriveSpecs.Get(drive);
             bool hasArm = joints.Length > 0;
             // Arm-only: fixed base and every drive cap at zero. topics.cmd is the
@@ -218,6 +229,10 @@ namespace OmniBot.VR.Control
                 IsLegged = capabilities.LeggedPose || capabilities.HumanoidPosture || capabilities.HumanoidLocomotion
                     || drive == DriveKind.Quadruped || drive == DriveKind.Hexapod || drive == DriveKind.Bipedal,
                 IsDualArm = capabilities.DualArm || (descriptor.Arms != null && descriptor.Arms.Length > 1),
+                LeftArmJointOffset = leftArmOffset,
+                LeftArmJointCount = leftArmCount,
+                RightArmJointOffset = rightArmOffset,
+                RightArmJointCount = rightArmCount,
                 Capabilities = capabilities,
                 IkLocation = ik,
                 Topics = topics,
@@ -639,6 +654,119 @@ namespace OmniBot.VR.Control
             if (value < min) return min;
             if (value > max) return max;
             return value;
+        }
+
+        /// <summary>
+        /// Locate each arm inside the concatenated joint list. Names come from
+        /// <c>manipulation.dual_arm</c> left/right, then from the arm or joint name.
+        /// Two unlabeled arms stay in descriptor order (first left, second right).
+        /// </summary>
+        private static bool TrySplitDualArms(
+            LatchedRobotDescriptor descriptor,
+            JointSpec[] flat,
+            out int leftOffset,
+            out int leftCount,
+            out int rightOffset,
+            out int rightCount)
+        {
+            leftOffset = 0;
+            leftCount = 0;
+            rightOffset = 0;
+            rightCount = 0;
+            if (descriptor?.Arms == null || flat == null || flat.Length == 0) return false;
+
+            var spans = new List<ArmSpan>();
+            int offset = 0;
+            foreach (var arm in descriptor.Arms)
+            {
+                if (arm?.Joints == null || arm.Joints.Length == 0) continue;
+                int count = arm.Joints.Length;
+                if (offset + count > flat.Length) return false;
+                spans.Add(new ArmSpan
+                {
+                    Name = arm.Name,
+                    Offset = offset,
+                    Count = count,
+                    FirstJoint = flat[offset].Name,
+                });
+                offset += count;
+            }
+
+            if (offset != flat.Length || spans.Count < 2) return false;
+
+            int leftIndex = FindArmSpan(spans, DualArmRole(descriptor, "left"), "left");
+            int rightIndex = FindArmSpan(spans, DualArmRole(descriptor, "right"), "right");
+            if (leftIndex < 0 || rightIndex < 0 || leftIndex == rightIndex)
+            {
+                if (spans.Count != 2) return false;
+                leftIndex = 0;
+                rightIndex = 1;
+            }
+
+            leftOffset = spans[leftIndex].Offset;
+            leftCount = spans[leftIndex].Count;
+            rightOffset = spans[rightIndex].Offset;
+            rightCount = spans[rightIndex].Count;
+            return true;
+        }
+
+        private static string DualArmRole(LatchedRobotDescriptor descriptor, string role)
+        {
+            var parms = descriptor.CapabilityParams;
+            if (parms == null) return null;
+            var block = parms[CapabilityNames.ManipulationDualArm] as JObject;
+            if (block == null) return null;
+            var token = block[role];
+            if (token == null || token.Type != JTokenType.String) return null;
+            string name = token.Value<string>();
+            return string.IsNullOrEmpty(name) ? null : name;
+        }
+
+        private static int FindArmSpan(List<ArmSpan> spans, string preferredName, string side)
+        {
+            if (!string.IsNullOrEmpty(preferredName))
+            {
+                for (int i = 0; i < spans.Count; i++)
+                {
+                    if (string.Equals(spans[i].Name, preferredName, StringComparison.OrdinalIgnoreCase))
+                        return i;
+                }
+            }
+
+            for (int i = 0; i < spans.Count; i++)
+            {
+                if (SideMatch(spans[i].Name, side) || SideMatch(spans[i].FirstJoint, side))
+                    return i;
+            }
+
+            return -1;
+        }
+
+        private static bool SideMatch(string value, string side)
+        {
+            if (string.IsNullOrEmpty(value) || string.IsNullOrEmpty(side)) return false;
+            if (string.Equals(value, side, StringComparison.OrdinalIgnoreCase)) return true;
+            if (value.StartsWith(side + "_", StringComparison.OrdinalIgnoreCase)) return true;
+            if (value.StartsWith(side + "-", StringComparison.OrdinalIgnoreCase)) return true;
+            if (value.EndsWith("_" + side, StringComparison.OrdinalIgnoreCase)) return true;
+            if (value.EndsWith("-" + side, StringComparison.OrdinalIgnoreCase)) return true;
+            if (string.Equals(side, "left", StringComparison.Ordinal)
+                && (value.StartsWith("l_", StringComparison.OrdinalIgnoreCase)
+                    || value.EndsWith("_l", StringComparison.OrdinalIgnoreCase)))
+                return true;
+            if (string.Equals(side, "right", StringComparison.Ordinal)
+                && (value.StartsWith("r_", StringComparison.OrdinalIgnoreCase)
+                    || value.EndsWith("_r", StringComparison.OrdinalIgnoreCase)))
+                return true;
+            return false;
+        }
+
+        private struct ArmSpan
+        {
+            public string Name;
+            public int Offset;
+            public int Count;
+            public string FirstJoint;
         }
     }
 }
