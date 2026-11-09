@@ -406,6 +406,95 @@ namespace OmniBot.VR.Tests
             Assert.AreEqual(AerialFlightConfirmation.ReasonEstop, scheme.LastRefusal);
         }
 
+        [TestCase(true, false)]
+        [TestCase(false, true)]
+        public void EitherGrip_CanClearLatchedEstop(bool left, bool right)
+        {
+            OperateSafetyLatch.Clear();
+            AerialDriveScheme scheme = MakeScheme("px4-x500");
+            var press = new TeleopInput
+            {
+                ButtonA = true,
+                ButtonB = true,
+                EmergencyStopPressed = true,
+                LeftGrip = left,
+                RightGrip = right,
+                DeltaTime = 0.1f
+            };
+            scheme.Tick(ref press, null);
+            Assert.IsTrue(scheme.IsEmergencyStopActive);
+
+            var reset = new TeleopInput
+            {
+                LeftGrip = left,
+                RightGrip = right,
+                ResetEmergencyStop = true,
+                DeltaTime = 0.1f
+            };
+            scheme.Tick(ref reset, null);
+            Assert.IsTrue(scheme.IsEmergencyStopActive, "Reset alone does not clear e-stop");
+
+            var release = new TeleopInput { DeltaTime = 0.1f };
+            scheme.Tick(ref release, null);
+            Assert.IsTrue(scheme.IsEmergencyStopActive, "Releasing the deadman does not clear e-stop");
+
+            var repress = new TeleopInput
+            {
+                LeftGrip = left,
+                RightGrip = right,
+                RightStick = new Vector2(0f, 1f),
+                DeltaTime = 0.1f
+            };
+            scheme.Tick(ref repress, null);
+            Assert.IsFalse(scheme.IsEmergencyStopActive);
+            Assert.IsFalse(scheme.LastCommand.Estop);
+            Assert.Greater(scheme.LastCommand.Vx, 0f);
+        }
+
+        [Test]
+        public void RightGrip_ClearsPostLossStickHold_BothGripsDoNot()
+        {
+            bool held = true;
+            bool released = false;
+            var still = new TeleopInput { RightGrip = true };
+            AerialDriveScheme.AdvancePostLossHold(ref held, ref released, still, true, false);
+            Assert.IsTrue(held, "A grip that never released does not unstick");
+            Assert.IsFalse(released);
+
+            var up = new TeleopInput();
+            AerialDriveScheme.AdvancePostLossHold(ref held, ref released, up, true, false);
+            Assert.IsTrue(held);
+            Assert.IsTrue(released);
+
+            var again = new TeleopInput { RightGrip = true };
+            AerialDriveScheme.AdvancePostLossHold(ref held, ref released, again, true, false);
+            Assert.IsFalse(held, "Right grip is the aerial deadman and finishes the re-press");
+            Assert.IsFalse(released);
+
+            held = true;
+            released = false;
+            var leftStill = new TeleopInput { LeftGrip = true };
+            AerialDriveScheme.AdvancePostLossHold(ref held, ref released, leftStill, true, false);
+            var leftUp = new TeleopInput();
+            AerialDriveScheme.AdvancePostLossHold(ref held, ref released, leftUp, true, false);
+            var leftAgain = new TeleopInput { LeftGrip = true };
+            AerialDriveScheme.AdvancePostLossHold(ref held, ref released, leftAgain, true, false);
+            Assert.IsFalse(held, "Left grip still finishes the aerial re-press");
+
+            held = true;
+            released = true;
+            var both = new TeleopInput { LeftGrip = true, RightGrip = true, BothGrips = true };
+            AerialDriveScheme.AdvancePostLossHold(ref held, ref released, both, true, false);
+            Assert.IsTrue(held, "Both grips are e-stop, not the deadman re-press");
+
+            held = true;
+            released = true;
+            var blocked = new TeleopInput { RightGrip = true };
+            AerialDriveScheme.AdvancePostLossHold(ref held, ref released, blocked, true, true);
+            Assert.IsTrue(held, "A safety latch keeps the stick hold");
+            Assert.IsTrue(released);
+        }
+
         [Test]
         public void Scheme_RightGrip_IsDeadmanNotTurbo()
         {

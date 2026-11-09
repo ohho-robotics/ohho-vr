@@ -50,9 +50,16 @@ namespace OmniBot.VR.Control.Drive
         private float _prevVx, _prevVy, _prevVz, _prevWz;
 
         // Operator clear is two more steps after the latch: an explicit Reset,
-        // then the left-grip deadman must be released and pressed again.
+        // then the scheme deadman must be released and pressed again. Ground
+        // schemes use the left grip. Aerial uses either grip, and never both.
         private bool _resetAccepted;
         private bool _deadmanReleasedAfterReset;
+
+        /// <summary>
+        /// Latched while the link was down, so the next connected tick must
+        /// publish emergency_stop true. A clear while disconnected is ignored.
+        /// </summary>
+        private bool _estopPublishPending;
 
         public bool IsConfigured => Profile != null;
         public abstract string HudHint { get; }
@@ -159,6 +166,7 @@ namespace OmniBot.VR.Control.Drive
         {
             if (OperateSafetyLatch.UiEStopLatched || gripHeld) return;
             EmergencyStopActive = false;
+            _estopPublishPending = false;
             _resetAccepted = false;
             _deadmanReleasedAfterReset = false;
             _publishEStopClear = true;
@@ -184,7 +192,18 @@ namespace OmniBot.VR.Control.Drive
 
         public virtual void Tick(ref TeleopInput input, IRobotLink link)
         {
-            if (!IsConfigured || Profile == null || !link.IsConnected) return;
+            if (!IsConfigured || Profile == null) return;
+
+            // Sample the latch before any publish. A one-frame A+B edge during
+            // a drop must stick, and a clear while the link is down would drop
+            // the local latch without the robot seeing emergency_stop false.
+            if (link == null || !link.IsConnected)
+            {
+                LatchEmergencyStopWhileLinkDown(ref input, link);
+                return;
+            }
+
+            FlushPendingEmergencyStop(link);
 
             RobotClassCaps.Ensure(Profile);
             if (_publishEStopClear && !OperateSafetyLatch.UiEStopLatched)
@@ -328,6 +347,7 @@ namespace OmniBot.VR.Control.Drive
         public void DiscardEmergencyStopLatch()
         {
             EmergencyStopActive = false;
+            _estopPublishPending = false;
             IsPublishing = false;
             VibrateControllers(0f);
         }
@@ -351,13 +371,16 @@ namespace OmniBot.VR.Control.Drive
             EmergencyStopActive = true;
             _resetAccepted = false;
             _deadmanReleasedAfterReset = false;
-            if (link != null && link.IsConnected && Profile?.Topics != null)
+            bool linkUp = link != null && link.IsConnected;
+            if (linkUp && Profile?.Topics != null)
             {
                 if (!string.IsNullOrEmpty(Profile.Topics.EmergencyStop))
                     link.Publish(Profile.Topics.EmergencyStop, new BoolMsg(true));
                 if (!string.IsNullOrEmpty(Profile.Topics.CmdVel))
                     link.Publish(Profile.Topics.CmdVel, ZeroTwist());
             }
+            // A drop cannot accept the publish. Hold it until the link returns.
+            _estopPublishPending = !linkUp;
             IsPublishing = false;
             VibrateControllers(1f);
         }
@@ -370,6 +393,7 @@ namespace OmniBot.VR.Control.Drive
         public void ClearEmergencyStop(IRobotLink link)
         {
             EmergencyStopActive = false;
+            _estopPublishPending = false;
             _resetAccepted = false;
             _deadmanReleasedAfterReset = false;
             if (link != null && link.IsConnected && Profile?.Topics != null)
@@ -382,13 +406,17 @@ namespace OmniBot.VR.Control.Drive
 
         /// <summary>
         /// Latch on A+B, the HUD button, or both grips. Clear only after Reset,
-        /// a left-grip release, and a re-press. Holding either chord blocks the clear.
-        /// Aerial calls this too; a level both-grips hold latches even without the edge flag.
+        /// a deadman release, and a re-press. Ground's deadman is the left grip.
+        /// Aerial's is either grip. Holding either chord blocks the clear.
+        /// A level both-grips or A+B hold latches even without the edge flag,
+        /// so a chord still held after a dropped edge latches on the next tick.
         /// </summary>
         protected void HandleEmergencyStop(ref TeleopInput input, IRobotLink link)
         {
+            bool abHeld = input.ButtonA && input.ButtonB;
             bool latch = input.EmergencyStopPressed || input.HudEmergencyStop || input.BothGripsPressed
-                || (input.BothGrips && !EmergencyStopActive);
+                || (input.BothGrips && !EmergencyStopActive)
+                || (abHeld && !EmergencyStopActive);
             if (latch)
             {
                 _resetAccepted = false;
@@ -412,22 +440,70 @@ namespace OmniBot.VR.Control.Drive
 
             if (!EmergencyStopActive) return;
 
-            // Holding either e-stop chord blocks the clear.
-            if (input.BothGrips || (input.ButtonA && input.ButtonB)) return;
+            // Holding either e-stop chord blocks the clear. Both physical grips
+            // count even when the BothGrips flag was not set on this sample.
+            if (input.BothGrips || abHeld || (input.LeftGrip && input.RightGrip)) return;
 
             if (input.ResetEmergencyStop)
                 _resetAccepted = true;
 
             // The release has to be observed after Reset. A grip that was already
             // up on the Reset tick counts; the re-press is a later tick.
-            if (_resetAccepted && !input.LeftGrip)
+            bool deadman = IsResetDeadmanHeld(input);
+            if (_resetAccepted && !deadman)
                 _deadmanReleasedAfterReset = true;
 
-            if (_resetAccepted && _deadmanReleasedAfterReset && input.LeftGrip)
+            if (_resetAccepted && _deadmanReleasedAfterReset && deadman)
             {
                 ClearEmergencyStop(link);
                 Debug.Log($"[{GetType().Name}] Emergency stop reset after deadman re-press.");
             }
+        }
+
+        /// <summary>
+        /// Grip that completes e-stop clear. Ground stays the left grip.
+        /// Aerial overrides this so either grip matches its deadman.
+        /// </summary>
+        protected virtual bool IsResetDeadmanHeld(in TeleopInput input)
+        {
+            return input.LeftGrip;
+        }
+
+        /// <summary>
+        /// Latch A+B, the HUD button, or both grips while nothing can be published.
+        /// Does not run the clear sequence.
+        /// </summary>
+        private void LatchEmergencyStopWhileLinkDown(ref TeleopInput input, IRobotLink link)
+        {
+            bool chord = input.EmergencyStopPressed || input.HudEmergencyStop || input.BothGripsPressed
+                || input.BothGrips || (input.ButtonA && input.ButtonB);
+            if (!chord) return;
+            if (!EmergencyStopActive)
+                TriggerEmergencyStop(link);
+            else
+            {
+                _resetAccepted = false;
+                _deadmanReleasedAfterReset = false;
+            }
+        }
+
+        /// <summary>
+        /// Publish a stop that was latched during a drop. Does not restart the
+        /// clear cycle, so a Reset already in progress is left alone.
+        /// </summary>
+        private void FlushPendingEmergencyStop(IRobotLink link)
+        {
+            if (!_estopPublishPending || !EmergencyStopActive) return;
+            if (link == null || !link.IsConnected) return;
+            if (Profile?.Topics != null)
+            {
+                if (!string.IsNullOrEmpty(Profile.Topics.EmergencyStop))
+                    link.Publish(Profile.Topics.EmergencyStop, new BoolMsg(true));
+                if (!string.IsNullOrEmpty(Profile.Topics.CmdVel))
+                    link.Publish(Profile.Topics.CmdVel, ZeroTwist());
+            }
+            IsPublishing = false;
+            _estopPublishPending = false;
         }
 
         private string LinearCapLabel()

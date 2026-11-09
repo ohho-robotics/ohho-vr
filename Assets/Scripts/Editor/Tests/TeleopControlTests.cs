@@ -5,9 +5,12 @@ using NUnit.Framework;
 using UnityEngine;
 using OmniBot.VR.Control;
 using OmniBot.VR.Control.Drive;
+using OmniBot.VR.Control.Manip;
+using OmniBot.VR.Control.Preflight;
 using OmniBot.VR.Control.Session;
 using OmniBot.VR.Core;
 using OmniBot.VR.Core.Platform;
+using OmniBot.VR.Policy;
 using OmniBot.VR.UI;
 
 namespace OmniBot.VR.Tests
@@ -481,6 +484,119 @@ namespace OmniBot.VR.Tests
         }
 
         [Test]
+        public void EmergencyStop_AAndB_HeldAcrossLinkDrop_StaysLatched()
+        {
+            var drive = new TeleopInput
+            {
+                LeftGrip = true,
+                LeftStick = new Vector2(0f, 1f),
+                DeltaTime = 0.1f
+            };
+            _scheme.Tick(ref drive, _link);
+            Assert.IsFalse(_scheme.IsEmergencyStopActive);
+
+            _link.IsConnected = false;
+            _link.Clear();
+            var edge = new TeleopInput
+            {
+                ButtonA = true,
+                ButtonB = true,
+                EmergencyStopPressed = true,
+                LeftGrip = true,
+                LeftStick = new Vector2(0f, 1f),
+                DeltaTime = 0.1f
+            };
+            _scheme.Tick(ref edge, _link);
+            Assert.IsTrue(_scheme.IsEmergencyStopActive, "A+B edge while the link is down still latches");
+            Assert.AreEqual(0, _link.Published.Count, "A down link must not publish the stop");
+
+            _link.IsConnected = true;
+            var held = new TeleopInput
+            {
+                ButtonA = true,
+                ButtonB = true,
+                LeftGrip = true,
+                LeftStick = new Vector2(0f, 1f),
+                DeltaTime = 0.1f
+            };
+            _scheme.Tick(ref held, _link);
+            Assert.IsTrue(_scheme.IsEmergencyStopActive, "A+B still held after reconnect stays latched");
+            Assert.IsTrue(PublishedEStop(true), "Reconnect publishes the stop the drop could not send");
+            AssertNoDriving(_link);
+        }
+
+        [Test]
+        public void EmergencyStop_AAndB_LevelHoldWithoutEdge_Latches()
+        {
+            var held = new TeleopInput
+            {
+                ButtonA = true,
+                ButtonB = true,
+                EmergencyStopPressed = false,
+                LeftGrip = true,
+                LeftStick = new Vector2(0f, 1f),
+                DeltaTime = 0.1f
+            };
+            _scheme.Tick(ref held, _link);
+            Assert.IsTrue(_scheme.IsEmergencyStopActive, "A held A+B chord latches without the one-frame edge");
+            AssertNoDriving(_link);
+        }
+
+        [Test]
+        public void EmergencyStop_ClearWhileLinkDown_DoesNotRelease()
+        {
+            _scheme.TriggerEmergencyStop(_link);
+            _link.Clear();
+            _link.IsConnected = false;
+
+            var reset = new TeleopInput { ResetEmergencyStop = true, LeftGrip = false, DeltaTime = 0.1f };
+            _scheme.Tick(ref reset, _link);
+            var repress = new TeleopInput
+            {
+                LeftGrip = true,
+                LeftStick = new Vector2(0f, 1f),
+                DeltaTime = 0.1f
+            };
+            _scheme.Tick(ref repress, _link);
+            Assert.IsTrue(_scheme.IsEmergencyStopActive, "A clear is not accepted while the link is down");
+            Assert.AreEqual(0, _link.Published.Count);
+
+            _link.IsConnected = true;
+            FinishDeadmanClear(_scheme);
+            Assert.IsFalse(_scheme.IsEmergencyStopActive);
+        }
+
+        [Test]
+        public void EmergencyStop_RightGripRepress_DoesNotClearGroundLatch()
+        {
+            _scheme.TriggerEmergencyStop(_link);
+            _link.Clear();
+
+            var reset = new TeleopInput
+            {
+                ResetEmergencyStop = true,
+                RightGrip = true,
+                LeftGrip = false,
+                DeltaTime = 0.1f
+            };
+            _scheme.Tick(ref reset, _link);
+            var release = new TeleopInput { LeftGrip = false, RightGrip = false, DeltaTime = 0.1f };
+            _scheme.Tick(ref release, _link);
+            var repress = new TeleopInput
+            {
+                RightGrip = true,
+                LeftGrip = false,
+                LeftStick = new Vector2(0f, 1f),
+                DeltaTime = 0.1f
+            };
+            _scheme.Tick(ref repress, _link);
+
+            Assert.IsTrue(_scheme.IsEmergencyStopActive, "Right grip is not the ground deadman and cannot clear e-stop");
+            Assert.IsFalse(PublishedEStop(false));
+            AssertNoDriving(_link);
+        }
+
+        [Test]
         public void EmergencyStop_HudButton_LatchesUntilDeadmanCycle()
         {
             var hud = new TeleopInput
@@ -916,6 +1032,140 @@ namespace OmniBot.VR.Tests
                 DeltaTime = 0.1f
             };
             scheme.Tick(ref repress, _link);
+        }
+
+        [Test]
+        public void AAndB_Hud_AndDriveLatch_DisarmTheArm()
+        {
+            PreflightGate.Allow();
+            var profile = MakeOmniBotProfile();
+            profile.Deployment = ArmDeployment.Sim;
+            profile.Topics.ArmEnable = "/arm/enable";
+            profile.Topics.ArmCommands = "/arm/joint_commands/teleop";
+
+            var origin = new GameObject("arm-estop-origin");
+            var host = new GameObject("arm-estop-host");
+            try
+            {
+                var arm = new HandIK6DofScheme();
+                arm.Configure(profile, origin.transform);
+                var teleop = host.AddComponent<TeleopController>();
+                var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+                typeof(TeleopController).GetField("_link", flags).SetValue(teleop, _link);
+                typeof(TeleopController).GetField("_manip", flags).SetValue(teleop, arm);
+                typeof(TeleopController).GetField("_drive", flags).SetValue(teleop, _scheme);
+
+                arm.SetArmEnabled(true, _link);
+                Assert.IsTrue(arm.ArmEnabled);
+                SetLastInput(teleop, new TeleopInput
+                {
+                    ButtonA = true,
+                    ButtonB = true,
+                    EmergencyStopPressed = true,
+                    DeltaTime = 0.1f
+                });
+                TickManip(teleop);
+                Assert.IsFalse(arm.ArmEnabled, "A+B disarms the arm");
+
+                ReleaseArm(teleop, arm);
+                SetLastInput(teleop, new TeleopInput { HudEmergencyStop = true, DeltaTime = 0.1f });
+                TickManip(teleop);
+                Assert.IsFalse(arm.ArmEnabled, "HUD e-stop disarms the arm");
+
+                ReleaseArm(teleop, arm);
+                _scheme.TriggerEmergencyStop(_link);
+                SetLastInput(teleop, new TeleopInput { LeftGrip = true, RightTrigger = true, DeltaTime = 0.1f });
+                TickManip(teleop);
+                Assert.IsFalse(arm.ArmEnabled, "A latched drive stop disarms the arm after the button is released");
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(host);
+                UnityEngine.Object.DestroyImmediate(origin);
+            }
+        }
+
+        [Test]
+        public void HudEmergencyStop_NotifiesRunningPolicy()
+        {
+            var profile = MakeOmniBotProfile();
+            profile.PolicyModelsFallback = "act,smolvla";
+            profile.Topics.ArmCmdMode = "/arm/cmd_mode";
+            profile.Topics.ArmCommands = "/arm/joint_commands/teleop";
+            profile.Topics.PolicyEnable = "/policy/enable";
+            profile.Topics.PolicyLoad = "/policy/load";
+
+            var policy = new PolicyController();
+            policy.Bind(profile, _link, PolicySessionKind.Sim);
+            Assert.IsTrue(policy.Select("act"));
+            Assert.IsTrue(policy.Load().Accepted, policy.LastRefusal);
+            policy.Confirm();
+            Assert.IsTrue(policy.Start().Accepted, policy.LastRefusal);
+            Assert.AreEqual(PolicyRunState.Running, policy.RunState);
+
+            var host = new GameObject("hud-policy-estop");
+            try
+            {
+                var teleop = host.AddComponent<TeleopController>();
+                teleop.EmergencyStopChanged += policy.NotifyEmergencyStop;
+                teleop.RequestHudEmergencyStop();
+
+                Assert.AreEqual(PolicyRunState.Stopped, policy.RunState);
+                Assert.AreEqual("estop", policy.LastStopReason);
+                Assert.IsTrue(policy.EmergencyStopActive);
+                Assert.IsTrue(_link.Published.Exists(p =>
+                    p.topic == profile.Topics.ControlMode && p.msg is StringMsg mode && mode.data == "teleop"));
+
+                policy.Confirm();
+                Assert.AreEqual(PolicyRefuse.Estop, policy.Start().Reason);
+
+                bool yielded = false;
+                teleop.EmergencyStopChanged += active => yielded = active;
+                typeof(TeleopController).GetMethod(
+                        "NotifyEmergencyStopEdges",
+                        BindingFlags.Instance | BindingFlags.NonPublic)
+                    .Invoke(teleop, new object[] { new TeleopInput { HudEmergencyStop = true } });
+                Assert.IsTrue(yielded, "HUD e-stop on the control frame yields the policy");
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(host);
+            }
+        }
+
+        void SetLastInput(TeleopController teleop, TeleopInput input)
+        {
+            typeof(TeleopController).GetField("_lastInput", BindingFlags.Instance | BindingFlags.NonPublic)
+                .SetValue(teleop, input);
+        }
+
+        void TickManip(TeleopController teleop)
+        {
+            typeof(TeleopController).GetMethod(
+                    "TickManipulation",
+                    BindingFlags.Instance | BindingFlags.NonPublic)
+                .Invoke(teleop, null);
+        }
+
+        void ReleaseArm(TeleopController teleop, HandIK6DofScheme arm)
+        {
+            SetLastInput(teleop, new TeleopInput { DeltaTime = 0.1f });
+            TickManip(teleop);
+            arm.SetArmEnabled(true, _link);
+            Assert.IsTrue(arm.ArmEnabled);
+        }
+
+        static void AssertNoDriving(FakeRobotLink link)
+        {
+            foreach (var (topic, msg) in link.Published)
+            {
+                if (msg is TwistMsg twist && twist.linear != null)
+                {
+                    Assert.AreEqual(0f, twist.linear.x, 0.0001f, topic);
+                    Assert.AreEqual(0f, twist.linear.y, 0.0001f, topic);
+                    Assert.AreEqual(0f, twist.linear.z, 0.0001f, topic);
+                }
+            }
         }
 
         DriveSchemeBase DriveOf(TeleopController teleop)

@@ -97,8 +97,9 @@ namespace OmniBot.VR.Control.Drive
             // Sim-serve has its own grip deadman (either grip). The Ohho e-stop
             // latches on both grips, A+B, the HUD button, or the operate-screen
             // latch. Releasing them does not clear it. A controller latch clears
-            // only after Reset, a left-grip release, and a re-press, and that
-            // clear is refused while the operate latch is set. There is no turbo.
+            // only after Reset, a deadman release, and a re-press. Either grip
+            // is that deadman. The clear is refused while the operate latch is
+            // set. There is no turbo.
             RobotClassCaps.Ensure(Profile);
             HandleEmergencyStop(ref input, link);
 
@@ -173,6 +174,44 @@ namespace OmniBot.VR.Control.Drive
             _timer = 0f;
             if (_sender != null && _sender.IsConnected)
                 _sender.Send(SimServeAerialJson.Serialize(cmd));
+        }
+
+        /// <summary>
+        /// E-stop clear uses the same deadman as flight: either grip, never both.
+        /// </summary>
+        protected override bool IsResetDeadmanHeld(in TeleopInput input)
+        {
+            return EitherGripDeadman(input);
+        }
+
+        /// <summary>
+        /// Either grip is the aerial deadman. Both grips stay the e-stop chord.
+        /// </summary>
+        public static bool EitherGripDeadman(in TeleopInput input)
+        {
+            bool both = input.BothGrips || (input.LeftGrip && input.RightGrip);
+            return (input.LeftGrip || input.RightGrip) && !both;
+        }
+
+        /// <summary>
+        /// Stick hold after a presence drop. A right-grip-only pilot can finish
+        /// the release and re-press. Both grips do not count as that re-press.
+        /// </summary>
+        public static void AdvancePostLossHold(
+            ref bool motionHeld,
+            ref bool deadmanReleased,
+            in TeleopInput input,
+            bool operatorPresent,
+            bool safetyLatched)
+        {
+            if (!motionHeld || !operatorPresent || safetyLatched) return;
+            if (!EitherGripDeadman(input))
+                deadmanReleased = true;
+            else if (deadmanReleased)
+            {
+                motionHeld = false;
+                deadmanReleased = false;
+            }
         }
 
         protected override TwistMsg ComputeVelocity(

@@ -240,12 +240,10 @@ namespace OmniBot.VR.Control
             var input = ReadInput();
             _lastInput = input;
 
-            // Both grips and A+B latch e-stop. A policy must yield on either edge.
-            // Exceptions must not skip the drive tick.
-            if (input.BothGripsPressed || input.EmergencyStopPressed)
-                Raise(EmergencyStopChanged, true);
-            else if (input.BothGripsReleased)
-                Raise(EmergencyStopChanged, false);
+            // Both grips, A+B, and the HUD button latch e-stop. A policy must
+            // yield on any of those edges. Releasing both grips is the existing
+            // yield-clear. The drive latch itself stays until Reset.
+            NotifyEmergencyStopEdges(input);
 
             // Heartbeat, latched e-stop, and the ground deadman always run.
             // Aerial is omitted from this tick: safety only drives while the
@@ -257,17 +255,14 @@ namespace OmniBot.VR.Control
 
             if (aerialScheme && (linkUp || aerialUp))
             {
-                bool deadman = TeleopSafetySession.IsDeadmanHeld(input);
-                if (_aerialMotionHeld && _safety.OperatorPresent && !_safety.Latched)
-                {
-                    if (!deadman)
-                        _aerialDeadmanReleased = true;
-                    else if (_aerialDeadmanReleased)
-                    {
-                        _aerialMotionHeld = false;
-                        _aerialDeadmanReleased = false;
-                    }
-                }
+                // Either grip unsticks sticks after a presence drop. The ground
+                // deadman stays the left grip; this hold is aerial only.
+                AerialDriveScheme.AdvancePostLossHold(
+                    ref _aerialMotionHeld,
+                    ref _aerialDeadmanReleased,
+                    input,
+                    _safety.OperatorPresent,
+                    _safety.Latched);
 
                 var aerialInput = input;
                 if (!_safety.OperatorPresent || _safety.Latched || _aerialMotionHeld)
@@ -356,20 +351,32 @@ namespace OmniBot.VR.Control
                 TickThumbsUpToggle(gestureDetector.leftHand);
             }
 
-            bool clutch = OVRInput.Get(OVRInput.Axis1D.SecondaryIndexTrigger, OVRInput.Controller.RTouch) >= ClutchTriggerThreshold
-                || OVRInput.Get(OVRInput.Button.SecondaryIndexTrigger, OVRInput.Controller.RTouch);
-            bool xDown = OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.LTouch);
-            bool cycleJoint = OVRInput.GetDown(OVRInput.Button.PrimaryThumbstick, OVRInput.Controller.LTouch);
+            bool clutch = false;
+            bool xDown = false;
+            bool cycleJoint = false;
+            try
+            {
+                clutch = OVRInput.Get(OVRInput.Axis1D.SecondaryIndexTrigger, OVRInput.Controller.RTouch) >= ClutchTriggerThreshold
+                    || OVRInput.Get(OVRInput.Button.SecondaryIndexTrigger, OVRInput.Controller.RTouch);
+                xDown = OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.LTouch);
+                cycleJoint = OVRInput.GetDown(OVRInput.Button.PrimaryThumbstick, OVRInput.Controller.LTouch);
+            }
+            catch (Exception)
+            {
+                // Editor and headless runs have no OVR plugin. The arm e-stop
+                // below still has to be applied from the sampled input.
+            }
             bool thumbsPulse = _thumbsUpPulse;
             _thumbsUpPulse = false;
 
+            bool driveLatched = _drive is DriveSchemeBase driveScheme && driveScheme.IsEmergencyStopActive;
             var armInput = new ArmOperatorInput
             {
                 ClutchHeld = clutch,
                 TrackingGood = trackingGood,
                 JogAxis = _lastInput.RightStick.y,
                 CycleJointPressed = cycleJoint,
-                EmergencyStop = _lastInput.BothGrips,
+                EmergencyStop = ArmMotionBlocked(_lastInput, driveLatched),
                 DeltaTime = _lastInput.DeltaTime,
             };
             // Left X confirms a pending REAL enable. A thumbs-up never does.
@@ -538,10 +545,17 @@ namespace OmniBot.VR.Control
         public IRobotLink RobotLink => Link;
 
         /// <summary>
-        /// Both-grips e-stop edge. True when the existing deadman presses.
-        /// Drive and arm behaviour are unchanged; a policy must yield on true.
+        /// E-stop edge for a running policy. True for both grips, A+B, and the HUD button.
         /// </summary>
         public event Action<bool> EmergencyStopChanged;
+
+        private void NotifyEmergencyStopEdges(TeleopInput input)
+        {
+            if (input.BothGripsPressed || input.EmergencyStopPressed || input.HudEmergencyStop)
+                Raise(EmergencyStopChanged, true);
+            else if (input.BothGripsReleased)
+                Raise(EmergencyStopChanged, false);
+        }
 
         /// <summary>Fired after a profile is applied and topics are advertised.</summary>
         public event Action<RobotProfile> TeleopSessionStarted;
@@ -552,11 +566,24 @@ namespace OmniBot.VR.Control
         /// <summary>
         /// HUD e-stop. Latches until Reset plus a deadman release and re-press.
         /// Releasing the button does not clear it. The request sticks until a
-        /// connected tick accepts it.
+        /// connected tick accepts it. A running policy yields on this call.
         /// </summary>
         public void RequestHudEmergencyStop()
         {
             _hudEmergencyStop = true;
+            Raise(EmergencyStopChanged, true);
+        }
+
+        /// <summary>
+        /// Arm motion stops for every e-stop source, for the whole drive latch.
+        /// Both grips, A+B, and the HUD button all count. The latch covers the
+        /// frames after a one-shot HUD press has been consumed.
+        /// </summary>
+        public static bool ArmMotionBlocked(in TeleopInput input, bool driveLatched)
+        {
+            if (driveLatched || input.BothGrips || input.HudEmergencyStop || input.EmergencyStopPressed)
+                return true;
+            return input.ButtonA && input.ButtonB;
         }
 
         /// <summary>
