@@ -6,8 +6,10 @@ namespace OmniBot.VR.Control.Drive
     /// <summary>
     /// Shared infrastructure for every <see cref="IDriveScheme"/> — the common
     /// plumbing that doesn't change between a mecanum base, a drone, or an
-    /// underwater ROV: latched emergency stop (A+B or the HUD button; cleared
-    /// only by an explicit Reset followed by a deadman release and re-press),
+    /// underwater ROV: latched emergency stop (A+B, the HUD button, both grips,
+    /// or the operate-screen latch; a controller latch clears only after Reset,
+    /// a deadman release, and a re-press, and the operate latch blocks that
+    /// clear until the operate bar resets it),
     /// turbo (right trigger, sim sessions only, then clamped to the robot-class
     /// hard cap), deadman (left grip, on unless this is a kind=sim session that
     /// opted out), thumbstick dead-zone, 20 Hz publish-rate timing, zero-stop
@@ -44,6 +46,7 @@ namespace OmniBot.VR.Control.Drive
         protected float NoInputTimer;
         protected float NoInputModeTimer;
         protected bool InTeleopMode;
+        private bool _publishEStopClear;
         private float _prevVx, _prevVy, _prevVz, _prevWz;
 
         // Operator clear is two more steps after the latch: an explicit Reset,
@@ -54,7 +57,9 @@ namespace OmniBot.VR.Control.Drive
         public bool IsConfigured => Profile != null;
         public abstract string HudHint { get; }
 
-        /// <summary>True while emergency stop is latched.</summary>
+        /// <summary>
+        /// True while A+B, the HUD button, both grips, or the operate-screen latch is holding the base.
+        /// </summary>
         public bool IsEmergencyStopActive => EmergencyStopActive;
 
         /// <summary>
@@ -135,6 +140,7 @@ namespace OmniBot.VR.Control.Drive
             NoInputModeTimer = 0f;
             InTeleopMode = false;
             if (profile != null) RobotClassCaps.Ensure(profile);
+            _publishEStopClear = false;
             // Null profile keeps the safe default (deadman on). False sticks only
             // when this profile is a kind=sim session.
             RequireDeadman = profile == null || profile.RequireDeadman;
@@ -145,8 +151,23 @@ namespace OmniBot.VR.Control.Drive
         }
 
         /// <summary>
+        /// Clear a UI-latched stop after <see cref="OperateSafetyLatch"/> is cleared.
+        /// Refuses while the latch is still set or both grips are held, so reset
+        /// cannot release a stop the operator is still asserting.
+        /// </summary>
+        public void ReleaseUiStop(IRobotLink link, bool gripHeld)
+        {
+            if (OperateSafetyLatch.UiEStopLatched || gripHeld) return;
+            EmergencyStopActive = false;
+            _resetAccepted = false;
+            _deadmanReleasedAfterReset = false;
+            _publishEStopClear = true;
+            PublishEStopClear(link);
+        }
+
+        /// <summary>
         /// Simulation-only deadman opt-out. No effect unless the profile's session
-        /// kind is <see cref="Session.SessionKind.Sim"/>.
+        /// kind is <see cref="Session.SessionKind.Sim"/>. Device builds keep the deadman required.
         /// </summary>
         public void DisableDeadmanForSimulation()
         {
@@ -166,9 +187,14 @@ namespace OmniBot.VR.Control.Drive
             if (!IsConfigured || Profile == null || !link.IsConnected) return;
 
             RobotClassCaps.Ensure(Profile);
+            if (_publishEStopClear && !OperateSafetyLatch.UiEStopLatched)
+                PublishEStopClear(link);
 
-            // ── Emergency stop: A+B, HUD, or both grips. Latched until Reset + deadman cycle ─
+            // Emergency stop: A+B, HUD, both grips, or the operate latch.
+            // A controller latch clears only after Reset plus a deadman release
+            // and re-press. The operate latch refuses that clear.
             HandleEmergencyStop(ref input, link);
+            if (HoldUiEStop(link)) return;
             if (EmergencyStopActive)
             {
                 if (IsPublishing && !string.IsNullOrEmpty(Profile.Topics?.CmdVel))
@@ -373,6 +399,16 @@ namespace OmniBot.VR.Control.Drive
                     Debug.Log($"[{GetType().Name}] Emergency stop still latched.");
                 return;
             }
+            // The operate-screen latch is its own hold. Left X cannot clear it,
+            // and it blocks the controller clear until the operate bar resets it.
+            if (OperateSafetyLatch.UiEStopLatched)
+            {
+                _resetAccepted = false;
+                _deadmanReleasedAfterReset = false;
+                if (!EmergencyStopActive)
+                    TriggerEmergencyStop(link);
+                return;
+            }
 
             if (!EmergencyStopActive) return;
 
@@ -454,6 +490,36 @@ namespace OmniBot.VR.Control.Drive
             if (link == null || string.IsNullOrEmpty(Profile?.Topics?.CmdVel)) return;
             link.Publish(Profile.Topics.CmdVel, ZeroTwist());
             _prevVx = _prevVy = _prevVz = _prevWz = 0f;
+        }
+
+        private bool HoldUiEStop(IRobotLink link)
+        {
+            if (!OperateSafetyLatch.UiEStopLatched) return false;
+            if (!EmergencyStopActive)
+            {
+                EmergencyStopActive = true;
+                if (Profile.Topics != null && !string.IsNullOrEmpty(Profile.Topics.EmergencyStop))
+                    link.Publish(Profile.Topics.EmergencyStop, new BoolMsg(true));
+                if (Profile.Topics != null && !string.IsNullOrEmpty(Profile.Topics.CmdVel))
+                    link.Publish(Profile.Topics.CmdVel, ZeroTwist());
+            }
+            if (IsPublishing && Profile.Topics != null && !string.IsNullOrEmpty(Profile.Topics.CmdVel))
+            {
+                link.Publish(Profile.Topics.CmdVel, ZeroTwist());
+                IsPublishing = false;
+            }
+            return true;
+        }
+
+        private void PublishEStopClear(IRobotLink link)
+        {
+            if (!_publishEStopClear || OperateSafetyLatch.UiEStopLatched) return;
+            if (link == null || !link.IsConnected || Profile?.Topics == null) return;
+            if (!string.IsNullOrEmpty(Profile.Topics.EmergencyStop))
+                link.Publish(Profile.Topics.EmergencyStop, new BoolMsg(false));
+            if (!string.IsNullOrEmpty(Profile.Topics.CmdVel))
+                link.Publish(Profile.Topics.CmdVel, ZeroTwist());
+            _publishEStopClear = false;
         }
 
         protected static float ApplyDeadZone(float value)

@@ -95,9 +95,10 @@ namespace OmniBot.VR.Control.Drive
             if (!IsConfigured || Profile == null) return;
 
             // Sim-serve has its own grip deadman (either grip). The Ohho e-stop
-            // latches on both grips, A+B, or the HUD button. Releasing them does
-            // not clear it. Clearing takes Reset, then a left-grip release and re-press.
-            // There is no turbo on this path.
+            // latches on both grips, A+B, the HUD button, or the operate-screen
+            // latch. Releasing them does not clear it. A controller latch clears
+            // only after Reset, a left-grip release, and a re-press, and that
+            // clear is refused while the operate latch is set. There is no turbo.
             RobotClassCaps.Ensure(Profile);
             HandleEmergencyStop(ref input, link);
 

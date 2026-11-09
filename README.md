@@ -7,14 +7,17 @@ This repository is the **Meta Quest headset client only**. It does not contain t
 Unity application for controlling the OmniBot mecanum-wheel robot and SO-101 arm over ROSBridge (WebSocket, v2 JSON). Primary target: **Meta Quest 3 / 3S**. The camera feed prefers WebRTC (`com.unity.webrtc` 3.0.0, ohho_webrtc signaling) and falls back to MJPEG. Measuring Quest glass-to-glass latency is still roadmap.
 
 The app is a **single unified world-space screen** ("OhhO Screen") that floats
-in front of you in passthrough and always faces you. It is the headset-native
+in front of you in passthrough. It is the headset-native
 front end of **ohho-robotics.com**: the same Supabase account, the same garage
 of robots, the same branding — sign in once and everything is already there.
 
-Flow: **Login → Console (VR products) → Garage (your robots) → Simulate or Drive real → Teleop** —
-all inside the one screen. `WorldSpaceUiPlacer` defaults to 1.2 m ahead
-(`distance`) and billboards toward you; a scene value can override that.
-Press **left-controller B** to hide/show it.
+Flow: **Login → Console (VR products) → Garage (your robots) → Simulate or Drive real → Operate**.
+Menus billboard. After a session target is chosen, the operate view is one locked
+dashboard 1.6 m ahead (curved sim screen in the centre, telemetry on the left,
+arm joints on the right, mode and safety bar on top, controls legend along the
+bottom) so it does not drift while you drive. **Recentre** snaps it back. The
+side camera and controls canvases stay hidden during operate. Press
+**left-controller B** to hide/show the screen.
 
 Guides: [user guide](docs/user-guide.md), [local sim](docs/setup-local-sim.md),
 [cloud sim](docs/setup-cloud.md) (not ready), [real OmniBot](docs/setup-real-omnibot.md),
@@ -344,6 +347,7 @@ Cloud sim ([OHH-216](https://linear.app/ohho-robotics/issue/OHH-216)), AprilTag 
 │   │   │   ├── Auth/LoginPanelController.cs
 │   │   │   ├── Console/ConsolePanelController.cs
 │   │   │   ├── Garage/GaragePanelController.cs
+│   │   │   ├── Operate/            # locked operate layout, mode bar, comfort
 │   │   │   ├── Session/SessionPickerPanel.cs # Simulate / Drive real, then a target
 │   │   │   ├── TeleopHudController.cs # connection+telemetry+camera+recording+export
 │   │   │   └── ...
