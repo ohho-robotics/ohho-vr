@@ -1,5 +1,6 @@
 using UnityEngine;
 using OmniBot.VR.Core;
+using OmniBot.VR.Nav;
 
 namespace OmniBot.VR.Control.Drive
 {
@@ -14,6 +15,10 @@ namespace OmniBot.VR.Control.Drive
     /// hard cap), deadman (left grip, on unless this is a kind=sim session that
     /// opted out), thumbstick dead-zone, 20 Hz publish-rate timing, zero-stop
     /// after 0.1 s idle, and the <c>/control_mode</c> teleop↔idle management.
+    /// Real robots (<c>kind=real</c>) do not publish <c>nav2</c> on idle — that
+    /// mode is the Nav2 button or a new goal. Any stick input while Nav2 is
+    /// active cancels the goal and returns to teleop. A latched e-stop cancels
+    /// a Nav2 goal and refuses another until that latch is cleared.
     ///
     /// Subclasses implement <see cref="ComputeVelocity"/> — the scheme-specific
     /// mapping of dead-zoned thumbsticks + turbo flag → a
@@ -33,7 +38,7 @@ namespace OmniBot.VR.Control.Drive
         public const float HardTurboLinCapMps = RobotConfig.MAX_LINEAR_VEL;
 
         protected const float ZeroStopDelay = 0.1f;       // s before we stop publishing zeros
-        protected const float IdleModeRevertDelay = 0.5f; // s idle → revert control mode
+        protected const float IdleModeRevertDelay = 0.5f; // s idle → revert control mode (sim / non-nav2)
         protected const float PublishHz = 20f;
 
         protected RobotProfile Profile;
@@ -44,8 +49,7 @@ namespace OmniBot.VR.Control.Drive
         protected bool EmergencyStopActive;
         protected bool IsPublishing;
         protected float NoInputTimer;
-        protected float NoInputModeTimer;
-        protected bool InTeleopMode;
+        private readonly ControlModeMachine _mode = new ControlModeMachine();
         private bool _publishEStopClear;
         private float _prevVx, _prevVy, _prevVz, _prevWz;
 
@@ -150,9 +154,18 @@ namespace OmniBot.VR.Control.Drive
             _deadmanReleasedAfterReset = false;
             IsPublishing = false;
             NoInputTimer = 0f;
-            NoInputModeTimer = 0f;
-            InTeleopMode = false;
-            if (profile != null) RobotClassCaps.Ensure(profile);
+            _mode.IdleDelay = IdleModeRevertDelay;
+            _mode.Reset(IdleMode, profile != null ? profile.DeploymentKind : RobotDeployment.Real);
+            _mode.ActiveMode = ActiveMode;
+            if (profile != null)
+            {
+                RobotClassCaps.Ensure(profile);
+                NavGoalSession.Active.BeginRobot(profile);
+            }
+            // Reconfigure keeps a latch. The goal that belonged to this robot
+            // must not keep running underneath it.
+            if (EmergencyStopActive || OperateSafetyLatch.UiEStopLatched)
+                NavGoalSession.Active.SetHeadsetBlock(true, null);
             _publishEStopClear = false;
             // Null profile keeps the safe default (deadman on). False sticks only
             // when this profile is a kind=sim session.
@@ -176,6 +189,7 @@ namespace OmniBot.VR.Control.Drive
             _resetAccepted = false;
             _deadmanReleasedAfterReset = false;
             _publishEStopClear = true;
+            NavGoalSession.Active.SetHeadsetBlock(false, null);
             PublishEStopClear(link);
         }
 
@@ -227,7 +241,9 @@ namespace OmniBot.VR.Control.Drive
                     link.Publish(Profile.Topics.CmdVel, ZeroTwist());
                     IsPublishing = false;
                 }
-                UpdateControlMode(false, input.DeltaTime, link);
+                // Idle must not fall through to nav2 while the latch is held.
+                LatchNavGoal(link);
+                _mode.Stop();
                 return;
             }
 
@@ -322,16 +338,59 @@ namespace OmniBot.VR.Control.Drive
             // does that, on an explicit reset.
             VibrateControllers(0f);
             if (!IsConfigured || Profile == null) return;
+            bool estopHold = EmergencyStopActive
+                || OperateSafetyLatch.UiEStopLatched
+                || NavGoalSession.Active.CommandsBlocked;
+            bool wasNav = NavGoalSession.Active.GoalActive || NavGoalSession.Active.ModeIsNav2;
+            bool cancelNav = !estopHold
+                && RobotDeployment.IsReal(Profile.DeploymentKind)
+                && wasNav;
+            if (estopHold)
+            {
+                if (EmergencyStopActive || OperateSafetyLatch.UiEStopLatched)
+                    NavGoalSession.Active.SetHeadsetBlock(true, link);
+                else
+                    NavGoalSession.Active.CancelForEStop(link);
+            }
+            else if (cancelNav)
+            {
+                NavGoalSession.Active.CancelFromButton(link);
+            }
             if (link != null && link.IsConnected)
             {
                 PublishZero(link);
-                if (InTeleopMode) PublishControlMode(IdleMode, link);
+                if (estopHold)
+                {
+                    _mode.Stop();
+                    if (wasNav)
+                    {
+                        PublishControlMode(ActiveMode, link);
+                        NavGoalSession.Active.NoteModePublished(ActiveMode);
+                    }
+                }
+                else
+                {
+                    string idle = _mode.Stop();
+                    if (cancelNav)
+                    {
+                        // Leave the real robot in teleop so a late Nav2 command cannot run.
+                        PublishControlMode(ActiveMode, link);
+                        NavGoalSession.Active.NoteModePublished(ActiveMode);
+                    }
+                    else if (!string.IsNullOrEmpty(idle))
+                    {
+                        PublishControlMode(idle, link);
+                        NavGoalSession.Active.NoteModePublished(idle);
+                    }
+                }
             }
-            InTeleopMode = false;
+            else
+            {
+                _mode.Stop();
+            }
             IsPublishing = false;
             _prevVx = _prevVy = _prevVz = _prevWz = 0f;
             NoInputTimer = 0f;
-            NoInputModeTimer = 0f;
         }
 
         /// <summary>
@@ -346,6 +405,34 @@ namespace OmniBot.VR.Control.Drive
             EmergencyStopActive = true;
             IsPublishing = false;
             _estopPublishPending = publishPending;
+            // No link: a restore must not publish. The next connected tick
+            // flushes emergency_stop and cancels a goal that is still active.
+            NavGoalSession.Active.SetHeadsetBlock(true, null);
+            _mode.Stop();
+        }
+
+        /// <summary>
+        /// Operate-bar latch. Cancels Nav2 immediately, before the next drive tick.
+        /// </summary>
+        public void HoldNavForLatchedStop(IRobotLink link)
+        {
+            LatchNavGoal(link);
+            _mode.Stop();
+        }
+
+        /// <summary>
+        /// Robot <c>/ohho/safety/state</c> latch. Cancels Nav2 while it is held
+        /// and does not clear a headset latch when the robot latch drops.
+        /// </summary>
+        public void NoteRobotEStop(bool latched, IRobotLink link)
+        {
+            bool wasNav = latched && (NavGoalSession.Active.GoalActive || NavGoalSession.Active.ModeIsNav2);
+            NavGoalSession.Active.SetRobotBlock(latched, link);
+            if (!latched) return;
+            _mode.Stop();
+            if (!wasNav) return;
+            PublishControlMode(ActiveMode, link);
+            NavGoalSession.Active.NoteModePublished(ActiveMode);
         }
 
         /// <summary>
@@ -358,6 +445,7 @@ namespace OmniBot.VR.Control.Drive
             EmergencyStopActive = false;
             _estopPublishPending = false;
             IsPublishing = false;
+            NavGoalSession.Active.SetHeadsetBlock(false, null);
             VibrateControllers(0f);
         }
 
@@ -380,6 +468,8 @@ namespace OmniBot.VR.Control.Drive
             EmergencyStopActive = true;
             _resetAccepted = false;
             _deadmanReleasedAfterReset = false;
+            LatchNavGoal(link);
+            _mode.Stop();
             bool linkUp = link != null && link.IsConnected;
             if (linkUp && Profile?.Topics != null)
             {
@@ -405,6 +495,8 @@ namespace OmniBot.VR.Control.Drive
             _estopPublishPending = false;
             _resetAccepted = false;
             _deadmanReleasedAfterReset = false;
+            if (!OperateSafetyLatch.UiEStopLatched)
+                NavGoalSession.Active.SetHeadsetBlock(false, null);
             if (link != null && link.IsConnected && Profile?.Topics != null)
             {
                 if (!string.IsNullOrEmpty(Profile.Topics.EmergencyStop))
@@ -539,28 +631,32 @@ namespace OmniBot.VR.Control.Drive
             }
         }
 
+        /// <summary>
+        /// Cancel a live Nav2 goal and hold the headset block. Publishes teleop
+        /// once when the robot was in nav2, and nothing when it was not.
+        /// </summary>
+        private void LatchNavGoal(IRobotLink link)
+        {
+            bool wasNav = NavGoalSession.Active.GoalActive || NavGoalSession.Active.ModeIsNav2;
+            NavGoalSession.Active.SetHeadsetBlock(true, link);
+            if (!wasNav) return;
+            PublishControlMode(ActiveMode, link);
+            NavGoalSession.Active.NoteModePublished(ActiveMode);
+        }
+
         private void UpdateControlMode(bool hasInput, float dt, IRobotLink link)
         {
-            if (hasInput)
-            {
-                NoInputTimer = 0f;
-                NoInputModeTimer = 0f;
-                if (!InTeleopMode)
-                {
-                    InTeleopMode = true;
-                    PublishControlMode(ActiveMode, link);
-                }
-            }
-            else
-            {
-                NoInputTimer += dt;
-                NoInputModeTimer += dt;
-                if (InTeleopMode && NoInputModeTimer >= IdleModeRevertDelay)
-                {
-                    InTeleopMode = false;
-                    PublishControlMode(IdleMode, link);
-                }
-            }
+            if (hasInput) NoInputTimer = 0f;
+            else NoInputTimer += dt;
+
+            _mode.ActiveMode = ActiveMode;
+            NavStickHandover.Apply(
+                _mode,
+                NavGoalSession.Active,
+                link,
+                Profile.Topics.ControlMode,
+                hasInput,
+                dt);
         }
 
         protected void PublishControlMode(string mode, IRobotLink link)
@@ -580,6 +676,8 @@ namespace OmniBot.VR.Control.Drive
         private bool HoldUiEStop(IRobotLink link)
         {
             if (!OperateSafetyLatch.UiEStopLatched) return false;
+            LatchNavGoal(link);
+            _mode.Stop();
             if (!EmergencyStopActive)
             {
                 EmergencyStopActive = true;

@@ -10,6 +10,7 @@ using OmniBot.VR.Control.Preflight;
 using OmniBot.VR.Control.Session;
 using OmniBot.VR.Core;
 using OmniBot.VR.Core.Platform;
+using OmniBot.VR.Nav;
 using OmniBot.VR.Policy;
 using OmniBot.VR.UI;
 
@@ -79,10 +80,18 @@ namespace OmniBot.VR.Tests
         public void SetUp()
         {
             OperateSafetyLatch.Clear();
+            NavGoalSession.Active.ResetForTests();
             _link = new FakeRobotLink();
             _profile = MakeOmniBotProfile();
             _scheme = new MecanumDriveScheme();
             _scheme.Configure(_profile);
+        }
+
+        [TearDown]
+        public void TearDown()
+        {
+            OperateSafetyLatch.Clear();
+            NavGoalSession.Active.ResetForTests();
         }
 
         [Test]
@@ -742,6 +751,12 @@ namespace OmniBot.VR.Tests
         [Test]
         public void ControlMode_SwitchesToTeleopWhileDriving_AndNav2AfterIdleTimeout()
         {
+            // Simulators still revert to nav2 after idle. kind=real does not;
+            // that path is ControlMode_RealRobot_IdleAndStop_DoNotPublishNav2.
+            NavGoalSession.Active.ResetForTests();
+            _profile.DeploymentKind = RobotDeployment.Sim;
+            _scheme.Configure(_profile);
+
             // Frame 1: driving
             var drivingInput = new TeleopInput
             {
@@ -773,6 +788,12 @@ namespace OmniBot.VR.Tests
         [Test]
         public void Stop_PublishesZeroTwistAndNav2Mode()
         {
+            // Simulators publish nav2 when teleop stops. A real robot stays out
+            // of nav2 until the Nav2 button or a new goal.
+            NavGoalSession.Active.ResetForTests();
+            _profile.DeploymentKind = RobotDeployment.Sim;
+            _scheme.Configure(_profile);
+
             // Drive first to enter teleop mode
             var drivingInput = new TeleopInput
             {
@@ -794,6 +815,46 @@ namespace OmniBot.VR.Tests
             var mode = _link.Published.Find(p => p.topic == _profile.Topics.ControlMode);
             Assert.IsNotNull(mode.msg, "Stop must publish idle control mode");
             Assert.AreEqual("nav2", ((StringMsg)mode.msg).data);
+        }
+
+        [Test]
+        public void ControlMode_RealRobot_IdleAndStop_DoNotPublishNav2()
+        {
+            NavGoalSession.Active.ResetForTests();
+            _profile.DeploymentKind = RobotDeployment.Real;
+            _scheme.Configure(_profile);
+
+            var drivingInput = new TeleopInput
+            {
+                LeftStick = new Vector2(0f, 1f),
+                LeftGrip = true,
+                DeltaTime = 0.1f
+            };
+            _scheme.Tick(ref drivingInput, _link);
+
+            var modeMsg = _link.Published.Find(p => p.topic == _profile.Topics.ControlMode);
+            Assert.IsNotNull(modeMsg.msg);
+            Assert.AreEqual("teleop", ((StringMsg)modeMsg.msg).data);
+
+            _link.Clear();
+            var idleInput = new TeleopInput
+            {
+                LeftStick = Vector2.zero,
+                DeltaTime = 0.6f
+            };
+            _scheme.Tick(ref idleInput, _link);
+            Assert.IsFalse(PublishedMode("nav2"), "kind=real does not publish nav2 on idle");
+
+            _scheme.Stop(_link);
+            Assert.IsFalse(PublishedMode("nav2"), "kind=real stop does not hand control_mode to nav2");
+        }
+
+        bool PublishedMode(string mode)
+        {
+            return _link.Published.Exists(p =>
+                p.topic == _profile.Topics.ControlMode &&
+                p.msg is StringMsg text &&
+                text.data == mode);
         }
 
         [Test]

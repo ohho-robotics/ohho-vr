@@ -85,6 +85,11 @@ scene/prefab work in the editor._
   default; only a kind=sim session may turn it off), dead-zone, 20 Hz publish-timing and
   control-mode management from `MecanumDriveScheme`. Every drive scheme
   inherits it and only implements `ComputeVelocity` → `TwistMsg`.
+  `kind=real` does not publish `nav2` on idle; that mode is the Nav2 button
+  or a new goal. A stick while Nav2 is active cancels the goal and returns
+  to teleop. A latched e-stop (headset, operate bar, or robot safety state)
+  cancels a Nav2 goal and refuses another until that latch is cleared.
+  Simulated robots still revert to `nav2` after 0.5 s idle once the latch is clear.
 - **`DifferentialDriveScheme`** — `[v, ω]` for differential / skid-steer /
   tracked / rocker-bogie / unknown bases (TurtleBot 4, tracked robots).
 - **`AckermannDriveScheme`** — `[v, δ]` for car-like steering.
@@ -420,7 +425,7 @@ the catalog as an SVG/sprite atlas so VR and web share iconography.
 ## 9. Safety, latency, comfort (non-negotiable)
 
 - **Deadman:** hold the left grip to drive; release → zero velocity on that tick. On by default. Only a kind=sim session may turn it off, and the HUD shows that state.
-- **E-stop:** A+B or the HUD button → `/emergency_stop`, latched. Releasing the buttons or grips does not clear it. Clear takes an explicit Reset plus a deadman release and re-press.
+- **E-stop:** A+B, both grips, or the HUD button → `/emergency_stop`, latched. Releasing the buttons or grips does not clear it. Clear takes an explicit Reset plus a deadman release and re-press. While that latch, the operate-screen latch, or the robot safety latch is held, Nav2 goals are cancelled and new ones are refused.
 - **Clamping:** every command is clamped to the per-class hard cap (`HardMaxLinVel` / `HardMaxAngVel`; OmniBot 0.2 m/s and 1.0 rad/s) after calibration and after turbo. Calibration may only lower those caps. Joint commands stay inside `JointSpec.min/max`.
 - **Connection-loss watchdog:** no telemetry for N ms → auto-stop + red HUD.
 - **Rate:** 20 Hz command; IK solve budgeted < 5 ms/frame.

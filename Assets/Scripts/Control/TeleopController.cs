@@ -11,6 +11,7 @@ using OmniBot.VR.Control.Drive;
 using OmniBot.VR.Control.Manip;
 using OmniBot.VR.Control.Safety;
 using OmniBot.VR.Latency;
+using OmniBot.VR.Nav;
 
 namespace OmniBot.VR.Control
 {
@@ -431,6 +432,10 @@ namespace OmniBot.VR.Control
             if (profile.HasArm)
                 EnsureWorkspaceOrigin(profile);
             _drive = ControlSchemeFactory.CreateDriveScheme(profile);
+            // Drive schemes bind nav state in Configure. A robot with no drive
+            // scheme still must not keep the previous robot's map and goal.
+            if (_drive == null)
+                NavGoalSession.Active.BeginRobot(profile);
             if (_emergencyStopLatched && _drive is DriveSchemeBase drive)
             {
                 if (SameEndpoint(_emergencyStopEndpoint, CurrentEndpointKey()))
@@ -440,6 +445,7 @@ namespace OmniBot.VR.Control
                     _emergencyStopLatched = false;
                     _emergencyStopEndpoint = null;
                     _emergencyStopPublishPending = false;
+                    NavGoalSession.Active.SetHeadsetBlock(false, null);
                 }
             }
             AttachAerialClient(_drive);
@@ -625,6 +631,10 @@ namespace OmniBot.VR.Control
         public void LatchOperateEStop()
         {
             OperateSafetyLatch.Latch();
+            if (_drive is DriveSchemeBase scheme)
+                scheme.HoldNavForLatchedStop(Link);
+            else
+                NavGoalSession.Active.SetHeadsetBlock(true, Link);
             if (Profile?.Topics == null || !Link.IsConnected) return;
             if (!string.IsNullOrEmpty(Profile.Topics.EmergencyStop))
                 Link.Publish(Profile.Topics.EmergencyStop, new BoolMsg(true));
@@ -651,7 +661,10 @@ namespace OmniBot.VR.Control
                     Link.Publish(Profile.Topics.EmergencyStop, new BoolMsg(false));
                 if (!string.IsNullOrEmpty(Profile.Topics.CmdVel))
                     Link.Publish(Profile.Topics.CmdVel, new TwistMsg(new Vector3Msg(0f, 0f, 0f), new Vector3Msg(0f, 0f, 0f)));
+                NavGoalSession.Active.SetHeadsetBlock(false, null);
             }
+            else
+                NavGoalSession.Active.SetHeadsetBlock(false, null);
             return true;
         }
 

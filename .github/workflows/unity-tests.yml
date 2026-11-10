@@ -87,6 +87,10 @@ jobs:
           UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
           UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
           UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+          # download-cli resolves "latest" with this token. Without it the
+          # shared runner IP hits the unauthenticated 60/hour API limit and
+          # the step fails before Unity starts.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           unityVersion: 6000.5.2f1
           customImage: unityci/editor:ubuntu-6000.5.2f1-android-3

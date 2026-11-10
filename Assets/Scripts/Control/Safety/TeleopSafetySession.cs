@@ -5,6 +5,7 @@ using UnityEngine;
 using OmniBot.VR.Control.Drive;
 using OmniBot.VR.Control.Manip;
 using OmniBot.VR.Core;
+using OmniBot.VR.Nav;
 
 namespace OmniBot.VR.Control.Safety
 {
@@ -277,7 +278,12 @@ namespace OmniBot.VR.Control.Safety
             bool allow = AllowsDrive(deadman);
 
             if (drive is DriveSchemeBase gated)
+            {
+                gated.NoteRobotEStop(_latched, link);
                 gated.SuppressMotion = !allow;
+            }
+            else
+                NavGoalSession.Active.SetRobotBlock(_latched, link);
 
             // The scheme latches with no publish while the link is down.
             if (drive != null)

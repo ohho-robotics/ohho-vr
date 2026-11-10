@@ -8,6 +8,7 @@ using OmniBot.VR.Control.Drive;
 using OmniBot.VR.Control.Manip;
 using OmniBot.VR.Control.Safety;
 using OmniBot.VR.Core;
+using OmniBot.VR.Nav;
 
 namespace OmniBot.VR.Tests
 {
@@ -29,6 +30,8 @@ namespace OmniBot.VR.Tests
         [SetUp]
         public void SetUp()
         {
+            OperateSafetyLatch.Clear();
+            NavGoalSession.Active.ResetForTests();
             _clock = 5000;
             _link = new FakeRobotLink();
             _session = new TeleopSafetySession(() => _clock);

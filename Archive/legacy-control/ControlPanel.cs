@@ -8,6 +8,7 @@ using UnityEngine;
 using UnityEngine.UI;
 using OmniBot.VR.Control;
 using OmniBot.VR.Core;
+using OmniBot.VR.Nav;
 
 namespace OmniBot.VR.UI
 {
@@ -106,7 +107,8 @@ namespace OmniBot.VR.UI
                 Debug.LogWarning("[ControlPanel] Not connected.");
                 return;
             }
-            ROSBridgeClient.Instance.Publish("/control_mode", new StringMsg(mode));
+            // Real robots enter nav2 only from this button (or a goal), never from idle.
+            NavGoalSession.Active.RequestMode(mode);
             Debug.Log($"[ControlPanel] control_mode → {mode}");
         }
 
@@ -136,8 +138,8 @@ namespace OmniBot.VR.UI
         private void OnCancelMission()
         {
             if (!ROSBridgeClient.Instance.IsConnected) return;
-            // /mission/cancel is a std_msgs/String; send empty string as cancel signal
-            ROSBridgeClient.Instance.Publish("/mission/cancel", new StringMsg("cancel"));
+            // /mission/cancel aborts the mission planner; also cancel navigate_to_pose.
+            NavGoalSession.Active.CancelFromButton(null);
             Debug.Log("[ControlPanel] mission cancel sent.");
         }
 
