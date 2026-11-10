@@ -7,6 +7,7 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using OmniBot.VR.Control;
 using OmniBot.VR.Core;
+using OmniBot.VR.Nav;
 using OmniBot.VR.Recording;
 using OmniBot.VR.Telemetry;
 using OmniBot.VR.UI.Operate;
@@ -162,6 +163,7 @@ namespace OmniBot.VR.UI
             ApplyHudRows();
             OnConnectionState(conn != null && conn.IsConnected);
             RefreshRecordingUi();
+            NavGoalController.Ensure(this);
         }
 
         private void OnDisable()
