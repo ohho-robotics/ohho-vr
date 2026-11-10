@@ -240,6 +240,161 @@ namespace OmniBot.VR.Tests
         }
 
         [Test]
+        public void PartialRightName_DoesNotGiveTheLeftHandTheRightArm()
+        {
+            var descriptor = Load("capability-humanoid.descriptor.json");
+            SetNeutralArms(descriptor);
+            var dual = DualArmBlock(descriptor);
+            dual["left"] = "not-the-left";
+            dual["right"] = "starboard";
+
+            var profile = RobotProfileFactory.FromDescriptor(descriptor);
+            AssertSafetyUnchanged(profile, descriptor);
+            Assert.AreEqual(0, profile.RightArmJointOffset);
+            Assert.AreEqual(2, profile.RightArmJointCount);
+            Assert.AreEqual(2, profile.LeftArmJointOffset);
+            Assert.AreEqual(3, profile.LeftArmJointCount);
+            Assert.AreEqual("yaw_a", profile.Joints[profile.RightArmJointOffset].Name);
+            Assert.AreEqual("yaw_b", profile.Joints[profile.LeftArmJointOffset].Name);
+
+            profile.Topics.ArmCommands = "/arm/joint_commands";
+            var scheme = ControlSchemeFactory.CreateManipulationScheme(profile, null);
+            Assert.IsInstanceOf<DualArmManipulationScheme>(scheme);
+            var published = PublishJointCommands(scheme);
+            CollectionAssert.AreEqual(
+                new[] { "yaw_a", "elbow_a", "yaw_b", "elbow_b", "grip_b" },
+                published[0].name);
+            Assert.AreEqual(0.4f, published[0].position[0], 1e-4f);
+            Assert.AreEqual(-0.2f, published[0].position[1], 1e-4f);
+            Assert.AreEqual(0.1f, published[0].position[2], 1e-4f);
+            Assert.AreEqual(0.3f, published[0].position[3], 1e-4f);
+            Assert.AreEqual(-0.05f, published[0].position[4], 1e-4f);
+            Assert.Greater(published[1].position[0], published[0].position[0]);
+            Assert.LessOrEqual(published[1].position[0] - published[0].position[0], 0.15f + 1e-4f);
+            for (int i = 1; i < published[1].position.Length; i++)
+                Assert.AreEqual(published[0].position[i], published[1].position[i], 1e-4f, published[1].name[i]);
+        }
+
+        [Test]
+        public void PartialLeftName_KeepsThatArmWhenTheOtherNameIsMissing()
+        {
+            var descriptor = Load("capability-humanoid.descriptor.json");
+            SetNeutralArms(descriptor);
+            var dual = DualArmBlock(descriptor);
+            dual["left"] = "port";
+            dual.Remove("right");
+
+            var profile = RobotProfileFactory.FromDescriptor(descriptor);
+            AssertSafetyUnchanged(profile, descriptor);
+            Assert.AreEqual(2, profile.LeftArmJointOffset);
+            Assert.AreEqual(3, profile.LeftArmJointCount);
+            Assert.AreEqual(0, profile.RightArmJointOffset);
+            Assert.AreEqual(2, profile.RightArmJointCount);
+            Assert.AreEqual("yaw_b", profile.Joints[profile.LeftArmJointOffset].Name);
+            Assert.AreEqual("yaw_a", profile.Joints[profile.RightArmJointOffset].Name);
+
+            profile.Topics.ArmCommands = "/arm/joint_commands";
+            var scheme = ControlSchemeFactory.CreateManipulationScheme(profile, null);
+            Assert.IsInstanceOf<DualArmManipulationScheme>(scheme);
+            var published = PublishJointCommands(scheme);
+            CollectionAssert.AreEqual(
+                new[] { "yaw_a", "elbow_a", "yaw_b", "elbow_b", "grip_b" },
+                published[0].name);
+        }
+
+        [Test]
+        public void AmbiguousDualArm_DoesNotMirrorOrDrive()
+        {
+            var descriptor = Load("capability-humanoid.descriptor.json");
+            SetNeutralArms(descriptor);
+            var dual = DualArmBlock(descriptor);
+            dual["left"] = "no-such-left";
+            dual["right"] = "no-such-right";
+
+            var profile = RobotProfileFactory.FromDescriptor(descriptor);
+            AssertSafetyUnchanged(profile, descriptor);
+            Assert.AreEqual(0, profile.LeftArmJointCount);
+            Assert.AreEqual(0, profile.RightArmJointCount);
+            Assert.AreEqual(5, profile.ArmDof);
+            Assert.IsNull(ControlSchemeFactory.CreateManipulationScheme(profile, null));
+
+            profile.Topics.ArmCommands = "/arm/joint_commands";
+            var scheme = new DualArmManipulationScheme();
+            scheme.Configure(profile, null);
+            Assert.IsFalse(scheme.IsConfigured);
+            var link = new FakeRobotLink();
+            var right = new HandPose();
+            var left = new HandPose();
+            scheme.FeedArmInput(new ArmOperatorInput { EnableRequested = true, DeltaTime = 0.1f });
+            Assert.IsFalse(scheme.Tick(ref right, ref left, link));
+            Assert.AreEqual(0, link.Published.Count);
+        }
+
+        [Test]
+        public void BothSidesNamedAsOneArm_DoesNotDrive()
+        {
+            var descriptor = Load("capability-humanoid.descriptor.json");
+            SetNeutralArms(descriptor);
+            var dual = DualArmBlock(descriptor);
+            dual["left"] = "port";
+            dual["right"] = "port";
+
+            var profile = RobotProfileFactory.FromDescriptor(descriptor);
+            AssertSafetyUnchanged(profile, descriptor);
+            Assert.AreEqual(0, profile.LeftArmJointCount);
+            Assert.AreEqual(0, profile.RightArmJointCount);
+            Assert.IsNull(ControlSchemeFactory.CreateManipulationScheme(profile, null));
+        }
+
+        [Test]
+        public void SwappedSideNames_DoNotDriveTheRightArmWithTheLeftHand()
+        {
+            var descriptor = Load("capability-humanoid.descriptor.json");
+            var dual = DualArmBlock(descriptor);
+            dual["left"] = "right";
+            dual["right"] = "left";
+
+            var profile = RobotProfileFactory.FromDescriptor(descriptor);
+            AssertSafetyUnchanged(profile, descriptor);
+            Assert.AreEqual(0, profile.LeftArmJointCount);
+            Assert.AreEqual(0, profile.RightArmJointCount);
+            Assert.IsNull(ControlSchemeFactory.CreateManipulationScheme(profile, null));
+        }
+
+        [Test]
+        public void ReversedArms_MistypedCapabilityNames_FollowSideTokens()
+        {
+            var descriptor = Load("capability-humanoid.descriptor.json");
+            var rightArm = descriptor.Arms[1];
+            var leftArm = descriptor.Arms[0];
+            descriptor.Arms[0] = rightArm;
+            descriptor.Arms[1] = leftArm;
+            var dual = DualArmBlock(descriptor);
+            dual["left"] = "missing-left";
+            dual["right"] = "missing-right";
+
+            var profile = RobotProfileFactory.FromDescriptor(descriptor);
+            AssertSafetyUnchanged(profile, descriptor);
+            Assert.AreEqual(0, profile.RightArmJointOffset);
+            Assert.AreEqual(3, profile.RightArmJointCount);
+            Assert.AreEqual(3, profile.LeftArmJointOffset);
+            Assert.AreEqual(3, profile.LeftArmJointCount);
+            Assert.AreEqual("right_shoulder", profile.Joints[profile.RightArmJointOffset].Name);
+            Assert.AreEqual("left_shoulder", profile.Joints[profile.LeftArmJointOffset].Name);
+
+            profile.Topics.ArmCommands = "/arm/joint_commands";
+            var scheme = ControlSchemeFactory.CreateManipulationScheme(profile, null);
+            Assert.IsInstanceOf<DualArmManipulationScheme>(scheme);
+            var published = PublishJointCommands(scheme);
+            CollectionAssert.AreEqual(new[]
+            {
+                "right_shoulder", "right_elbow", "right_grip",
+                "left_shoulder", "left_elbow", "left_grip",
+            }, published[0].name);
+            Assert.AreEqual(6, published[0].name.Length);
+        }
+
+        [Test]
         public void CatalogDualArm_StillMirrorsOneJointList()
         {
             var joints = new JointSpec[7];
@@ -428,6 +583,30 @@ namespace OmniBot.VR.Tests
                 foreach (var id in BuiltInRobotIds)
                     Assert.IsFalse(text.Contains(id), fixture + " contains " + id);
             }
+        }
+
+        static void SetNeutralArms(LatchedRobotDescriptor descriptor)
+        {
+            descriptor.Arms[0].Name = "starboard";
+            descriptor.Arms[0].Joints = new[]
+            {
+                DescriptorJoint("yaw_a", 0.4),
+                DescriptorJoint("elbow_a", -0.2),
+            };
+            descriptor.Arms[1].Name = "port";
+            descriptor.Arms[1].Joints = new[]
+            {
+                DescriptorJoint("yaw_b", 0.1),
+                DescriptorJoint("elbow_b", 0.3),
+                DescriptorJoint("grip_b", -0.05),
+            };
+        }
+
+        static JObject DualArmBlock(LatchedRobotDescriptor descriptor)
+        {
+            var dual = descriptor.CapabilityParams[CapabilityNames.ManipulationDualArm] as JObject;
+            Assert.IsNotNull(dual);
+            return dual;
         }
 
         static OmniBot.VR.Descriptor.DescriptorJoint DescriptorJoint(string name, double home)

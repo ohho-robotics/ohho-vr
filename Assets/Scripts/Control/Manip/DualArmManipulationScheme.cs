@@ -14,7 +14,8 @@ namespace OmniBot.VR.Control.Manip
     /// Publishes a single <see cref="JointStateMsg"/> with both arms' joint names
     /// and positions to <c>profile.Topics.ArmCommands</c> at 20 Hz. Layout is
     /// right-arm joints, then left-arm joints. A dual-arm descriptor publishes
-    /// each arm's own names. A catalog profile whose <see cref="RobotProfile.Joints"/>
+    /// each arm's own names. A descriptor that does not resolve two different
+    /// arms publishes no joint command. A catalog profile whose <see cref="RobotProfile.Joints"/>
     /// array is one arm is mirrored with <c>r_</c> and <c>l_</c> prefixes. The
     /// arm-enable toggle (left thumbs-up) enables/disables both arms together.
     /// </summary>
@@ -69,9 +70,10 @@ namespace OmniBot.VR.Control.Manip
             _jogJoint = 0;
             _maxDelta = RobotDescriptor.ClampJointDelta(profile != null ? profile.MaxJointDeltaRad : 0f);
 
-            // Catalog Joints is one arm, mirrored below. A descriptor stores each
-            // arm as a span of that concatenated list and keeps the real names.
-            if (HasOwnArmJoints(profile))
+            // A resolved descriptor drives each span under its own names.
+            // A catalog profile has one joint list and is mirrored with r_/l_ prefixes.
+            // A descriptor dual-arm with no resolved spans publishes nothing.
+            if (HasDistinctArms(profile))
             {
                 BindArms(
                     profile.RightArmJointOffset,
@@ -79,6 +81,15 @@ namespace OmniBot.VR.Control.Manip
                     profile.LeftArmJointOffset,
                     profile.LeftArmJointCount,
                     prefixSides: false);
+            }
+            else if (profile.Capabilities != null
+                     && profile.Capabilities.FromDescriptor
+                     && profile.Capabilities.DualArm)
+            {
+                _rightSolver = null;
+                _leftSolver = null;
+                _allJointNames = null;
+                return;
             }
             else
             {
@@ -273,15 +284,18 @@ namespace OmniBot.VR.Control.Manip
             return newAngles;
         }
 
-        private static bool HasOwnArmJoints(RobotProfile profile)
+        internal static bool HasDistinctArms(RobotProfile profile)
         {
             if (profile?.Joints == null) return false;
-            if (profile.LeftArmJointCount <= 0 || profile.RightArmJointCount <= 0) return false;
-            if (profile.LeftArmJointOffset == profile.RightArmJointOffset
-                && profile.LeftArmJointCount == profile.RightArmJointCount)
-                return false;
-            return SpanFits(profile.Joints.Length, profile.LeftArmJointOffset, profile.LeftArmJointCount)
-                && SpanFits(profile.Joints.Length, profile.RightArmJointOffset, profile.RightArmJointCount);
+            int leftOffset = profile.LeftArmJointOffset;
+            int leftCount = profile.LeftArmJointCount;
+            int rightOffset = profile.RightArmJointOffset;
+            int rightCount = profile.RightArmJointCount;
+            if (!SpanFits(profile.Joints.Length, leftOffset, leftCount)) return false;
+            if (!SpanFits(profile.Joints.Length, rightOffset, rightCount)) return false;
+            int leftEnd = leftOffset + leftCount;
+            int rightEnd = rightOffset + rightCount;
+            return leftEnd <= rightOffset || rightEnd <= leftOffset;
         }
 
         private static bool SpanFits(int length, int offset, int count)

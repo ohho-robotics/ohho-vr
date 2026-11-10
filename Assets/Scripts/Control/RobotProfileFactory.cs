@@ -657,9 +657,12 @@ namespace OmniBot.VR.Control
         }
 
         /// <summary>
-        /// Locate each arm inside the concatenated joint list. Names come from
-        /// <c>manipulation.dual_arm</c> left/right, then from the arm or joint name.
-        /// Two unlabeled arms stay in descriptor order (first left, second right).
+        /// Locate each arm inside the concatenated joint list. A
+        /// <c>manipulation.dual_arm</c> name that matches one side is kept, and
+        /// the other arm is the remaining span. Arm and joint side tokens identify
+        /// a side when the capability name does not. An unlabeled pair, one arm
+        /// named for both sides, or a side that would drive a right arm with the
+        /// left hand is refused.
         /// </summary>
         private static bool TrySplitDualArms(
             LatchedRobotDescriptor descriptor,
@@ -696,18 +699,35 @@ namespace OmniBot.VR.Control
 
             int leftIndex = FindArmSpan(spans, DualArmRole(descriptor, "left"), "left");
             int rightIndex = FindArmSpan(spans, DualArmRole(descriptor, "right"), "right");
-            if (leftIndex < 0 || rightIndex < 0 || leftIndex == rightIndex)
+            bool distinct = leftIndex >= 0 && rightIndex >= 0 && leftIndex != rightIndex;
+            if (!distinct && spans.Count == 2)
             {
-                if (spans.Count != 2) return false;
-                leftIndex = 0;
-                rightIndex = 1;
+                if (leftIndex >= 0 && rightIndex < 0 && (leftIndex == 0 || leftIndex == 1))
+                {
+                    rightIndex = leftIndex == 0 ? 1 : 0;
+                    distinct = true;
+                }
+                else if (rightIndex >= 0 && leftIndex < 0 && (rightIndex == 0 || rightIndex == 1))
+                {
+                    leftIndex = rightIndex == 0 ? 1 : 0;
+                    distinct = true;
+                }
             }
+
+            if (!distinct) return false;
+            if (ClaimsSide(spans[leftIndex], "right") || ClaimsSide(spans[rightIndex], "left"))
+                return false;
 
             leftOffset = spans[leftIndex].Offset;
             leftCount = spans[leftIndex].Count;
             rightOffset = spans[rightIndex].Offset;
             rightCount = spans[rightIndex].Count;
             return true;
+        }
+
+        private static bool ClaimsSide(ArmSpan span, string side)
+        {
+            return SideMatch(span.Name, side) || SideMatch(span.FirstJoint, side);
         }
 
         private static string DualArmRole(LatchedRobotDescriptor descriptor, string role)

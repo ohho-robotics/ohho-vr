@@ -192,10 +192,11 @@ namespace OmniBot.VR.Control
         public bool IsDualArm;
 
         /// <summary>
-        /// Spans of <see cref="Joints"/> for a dual-arm descriptor. Counts stay 0
-        /// on the catalog path, where <see cref="Joints"/> is one arm and the
-        /// dual-arm scheme mirrors it with <c>r_</c>/<c>l_</c> names. A descriptor
-        /// publishes the joints in each span under their own names.
+        /// Spans of <see cref="Joints"/> for a resolved dual-arm descriptor.
+        /// Counts stay 0 on the catalog path, where <see cref="Joints"/> is one
+        /// arm and the dual-arm scheme mirrors it with <c>r_</c>/<c>l_</c> names,
+        /// and when a descriptor cannot map both arms without guessing. A resolved
+        /// descriptor publishes the joints in each span under their own names.
         /// </summary>
         public int LeftArmJointOffset;
         public int LeftArmJointCount;

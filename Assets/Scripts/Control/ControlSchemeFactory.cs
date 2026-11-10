@@ -24,7 +24,7 @@ namespace OmniBot.VR.Control
     /// Manipulation dispatch:
     /// <list type="bullet">
     /// <item>6-DOF arm (SO-101, UR5e) → <see cref="HandIK6DofScheme"/></item>
-    /// <item>Descriptor <c>manipulation.dual_arm</c> (each arm's own joints) or catalog armDof ≥ 7 → <see cref="DualArmManipulationScheme"/></item>
+    /// <item>Descriptor <c>manipulation.dual_arm</c> with two resolved arms, or catalog armDof ≥ 7 → <see cref="DualArmManipulationScheme"/>. An unresolved descriptor mapping selects nothing.</item>
     /// <item>1-DOF gripper-only → <see cref="GripperOnlyScheme"/></item>
     /// <item>No arm → null (manipulation layer absent)</item>
     /// </list>
@@ -110,10 +110,14 @@ namespace OmniBot.VR.Control
             if (fromDescriptor && !CapabilitySchemes.AllowsManipulation(profile.Capabilities))
                 return null;
 
-            // manipulation.dual_arm. Joints is every arm concatenated; the scheme
-            // publishes LeftArmJoint* / RightArmJoint* under those joint names.
-            if (fromDescriptor && profile.Capabilities.DualArm && profile.ArmDof >= 2)
+            // manipulation.dual_arm. Joints is every arm concatenated. Drive each
+            // resolved span under its own names. A missing or ambiguous split
+            // publishes nothing: do not mirror that list or drive it as one arm.
+            if (fromDescriptor && profile.Capabilities.DualArm)
             {
+                if (!DualArmManipulationScheme.HasDistinctArms(profile))
+                    return null;
+
                 var dual = new DualArmManipulationScheme();
                 dual.Configure(profile, workspaceOrigin);
                 return dual;
