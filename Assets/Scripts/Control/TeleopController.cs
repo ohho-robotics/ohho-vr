@@ -87,6 +87,12 @@ namespace OmniBot.VR.Control
         /// <summary>ip:port the latch was taken on. Empty when no ConnectionManager is loaded.</summary>
         private string _emergencyStopEndpoint;
 
+        /// <summary>
+        /// The latched stop never reached the robot. The replacement scheme
+        /// publishes <c>emergency_stop</c> true on the next connected tick.
+        /// </summary>
+        private bool _emergencyStopPublishPending;
+
         /// <summary>When set, replaces the ConnectionManager endpoint (edit-mode tests).</summary>
         private string _endpointKeyOverride;
 
@@ -428,11 +434,12 @@ namespace OmniBot.VR.Control
             if (_emergencyStopLatched && _drive is DriveSchemeBase drive)
             {
                 if (SameEndpoint(_emergencyStopEndpoint, CurrentEndpointKey()))
-                    drive.RestoreEmergencyStopLatch();
+                    drive.RestoreEmergencyStopLatch(_emergencyStopPublishPending);
                 else
                 {
                     _emergencyStopLatched = false;
                     _emergencyStopEndpoint = null;
+                    _emergencyStopPublishPending = false;
                 }
             }
             AttachAerialClient(_drive);
@@ -474,11 +481,14 @@ namespace OmniBot.VR.Control
                     if (!_emergencyStopLatched || _emergencyStopEndpoint == null)
                         _emergencyStopEndpoint = CurrentEndpointKey();
                     _emergencyStopLatched = true;
+                    // Read before Stop. A drop may have latched without a publish.
+                    _emergencyStopPublishPending = drive.EmergencyStopPublishPending;
                 }
                 else
                 {
                     _emergencyStopLatched = false;
                     _emergencyStopEndpoint = null;
+                    _emergencyStopPublishPending = false;
                 }
             }
             if (!_teleopActive && _drive == null && _manip == null) return;
@@ -679,6 +689,7 @@ namespace OmniBot.VR.Control
             drive.DiscardEmergencyStopLatch();
             _emergencyStopLatched = false;
             _emergencyStopEndpoint = null;
+            _emergencyStopPublishPending = false;
         }
 
         private void RememberLatchEndpoint()

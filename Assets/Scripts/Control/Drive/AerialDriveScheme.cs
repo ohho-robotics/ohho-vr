@@ -101,6 +101,10 @@ namespace OmniBot.VR.Control.Drive
             // is that deadman. The clear is refused while the operate latch is
             // set. There is no turbo.
             RobotClassCaps.Ensure(Profile);
+            // Ground Tick flushes this before handling the latch. Aerial owns Tick,
+            // so a stop taken while the robot link was down is published here once
+            // the link can accept it. Sim-serve still uses its own sender.
+            FlushPendingEmergencyStop(link);
             HandleEmergencyStop(ref input, link);
 
             bool latched = EmergencyStopActive;

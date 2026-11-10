@@ -343,6 +343,19 @@ namespace OmniBot.VR.Tests
         }
 
         [Test]
+        public void BothGrips_StopsTheArm_AndKeepsItStoppedAfterRelease()
+        {
+            AssertArmStoppedBy(input =>
+            {
+                input.LeftGrip = true;
+                input.RightGrip = true;
+                input.BothGrips = true;
+                input.BothGripsPressed = true;
+                return input;
+            }, "both grips");
+        }
+
+        [Test]
         public void AAndB_HeldAcrossLinkDrop_StaysLatchedAfterReconnect()
         {
             var input = Forward(0.1f);

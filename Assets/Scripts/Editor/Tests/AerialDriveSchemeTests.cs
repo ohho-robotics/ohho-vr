@@ -3,6 +3,7 @@ using Newtonsoft.Json.Linq;
 using NUnit.Framework;
 using OmniBot.VR.Control;
 using OmniBot.VR.Control.Drive;
+using OmniBot.VR.Core;
 using UnityEngine;
 
 namespace OmniBot.VR.Tests
@@ -404,6 +405,50 @@ namespace OmniBot.VR.Tests
             Assert.AreEqual(AerialEstopEffect.MotorCut, scheme.LastCommand.EstopEffect);
             Assert.IsFalse(scheme.TryTakeoff(AerialFlightConfirmation.Phrase));
             Assert.AreEqual(AerialFlightConfirmation.ReasonEstop, scheme.LastRefusal);
+        }
+
+        [Test]
+        public void LinkDownAAndB_PublishesEStopWhenLinkReturns()
+        {
+            var scheme = new AerialDriveScheme();
+            scheme.Configure(new RobotProfile
+            {
+                RobotId = "px4-x500",
+                Name = "px4-x500",
+                Drive = DriveKind.Quadrotor,
+                MaxLinVel = Lin,
+                MaxAngVel = Ang,
+                Topics = new RobotTopics
+                {
+                    CmdVel = "/cmd_vel/teleop",
+                    EmergencyStop = "/emergency_stop",
+                },
+            });
+            var link = new FakeRobotLink { IsConnected = false };
+            var edge = new TeleopInput
+            {
+                ButtonA = true,
+                ButtonB = true,
+                EmergencyStopPressed = true,
+                DeltaTime = 0.1f,
+            };
+            scheme.Tick(ref edge, link);
+            Assert.IsTrue(scheme.IsEmergencyStopActive);
+            Assert.IsTrue(scheme.EmergencyStopPublishPending);
+            Assert.AreEqual(0, link.Published.Count);
+
+            link.IsConnected = true;
+            var held = new TeleopInput
+            {
+                ButtonA = true,
+                ButtonB = true,
+                DeltaTime = 0.1f,
+            };
+            scheme.Tick(ref held, link);
+            Assert.IsFalse(scheme.EmergencyStopPublishPending);
+            Assert.IsTrue(link.Published.Exists(p =>
+                p.Topic == "/emergency_stop" && p.Msg is BoolMsg flag && flag.data));
+            Assert.IsTrue(scheme.IsEmergencyStopActive);
         }
 
         [TestCase(true, false)]

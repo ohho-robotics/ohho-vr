@@ -1017,6 +1017,169 @@ namespace OmniBot.VR.Tests
             }
         }
 
+        [Test]
+        public void RestoreEmergencyStopLatch_KeepsUnpublishedStop()
+        {
+            _link.IsConnected = false;
+            _scheme.TriggerEmergencyStop(_link);
+            Assert.IsTrue(_scheme.IsEmergencyStopActive);
+            Assert.IsTrue(_scheme.EmergencyStopPublishPending);
+            Assert.AreEqual(0, _link.Published.Count);
+
+            var replacement = new MecanumDriveScheme();
+            replacement.Configure(_profile);
+            replacement.RestoreEmergencyStopLatch(publishPending: true);
+            Assert.IsTrue(replacement.IsEmergencyStopActive);
+            Assert.IsTrue(replacement.EmergencyStopPublishPending);
+            Assert.AreEqual(0, _link.Published.Count, "Restore must not publish while the link is down");
+
+            _link.IsConnected = true;
+            var drive = new TeleopInput
+            {
+                LeftGrip = true,
+                LeftStick = new Vector2(0f, 1f),
+                ButtonA = true,
+                ButtonB = true,
+                DeltaTime = 0.1f
+            };
+            replacement.Tick(ref drive, _link);
+            Assert.IsTrue(replacement.IsEmergencyStopActive);
+            Assert.IsFalse(replacement.EmergencyStopPublishPending);
+            Assert.IsTrue(PublishedEStop(true), "Reconnect publishes the stop the drop could not send");
+            Assert.IsFalse(PublishedEStop(false));
+            AssertNoDriving(_link);
+        }
+
+        [Test]
+        public void TeleopRestart_LinkDownEStop_PublishesOnReconnect_ForEverySource()
+        {
+            AssertPendingSurvivesRestart(new TeleopInput
+            {
+                ButtonA = true,
+                ButtonB = true,
+                EmergencyStopPressed = true,
+                DeltaTime = 0.1f
+            }, "A+B");
+            AssertPendingSurvivesRestart(new TeleopInput
+            {
+                HudEmergencyStop = true,
+                DeltaTime = 0.1f
+            }, "HUD");
+            AssertPendingSurvivesRestart(new TeleopInput
+            {
+                LeftGrip = true,
+                RightGrip = true,
+                BothGrips = true,
+                BothGripsPressed = true,
+                DeltaTime = 0.1f
+            }, "both grips");
+        }
+
+        [Test]
+        public void TeleopRestart_AfterDeliveredEStop_DoesNotRepublish()
+        {
+            _profile.HasArm = false;
+            _profile.ArmDof = 0;
+            var host = new GameObject("delivered-estop-restart");
+            try
+            {
+                var teleop = host.AddComponent<TeleopController>();
+                typeof(TeleopController).GetField("_link", BindingFlags.Instance | BindingFlags.NonPublic)
+                    .SetValue(teleop, _link);
+                SetEndpoint(teleop, "10.0.0.9:9090");
+                PreflightGate.Allow();
+
+                teleop.StartTeleop(_profile);
+                var first = DriveOf(teleop);
+                var stop = new TeleopInput
+                {
+                    ButtonA = true,
+                    ButtonB = true,
+                    EmergencyStopPressed = true,
+                    DeltaTime = 0.1f
+                };
+                first.Tick(ref stop, _link);
+                Assert.IsTrue(first.IsEmergencyStopActive);
+                Assert.IsFalse(first.EmergencyStopPublishPending, "A delivered stop is not waiting to publish");
+                _link.Clear();
+
+                teleop.StartTeleop(_profile);
+                var second = DriveOf(teleop);
+                Assert.IsTrue(second.IsEmergencyStopActive);
+                Assert.IsFalse(second.EmergencyStopPublishPending);
+
+                var drive = new TeleopInput
+                {
+                    LeftGrip = true,
+                    LeftStick = new Vector2(0f, 1f),
+                    DeltaTime = 0.1f
+                };
+                second.Tick(ref drive, _link);
+                Assert.IsFalse(PublishedEStop(true), "Restart does not send emergency_stop true again");
+                Assert.IsFalse(PublishedEStop(false));
+                AssertNoDriving(_link);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(host);
+            }
+        }
+
+        void AssertPendingSurvivesRestart(TeleopInput stop, string source)
+        {
+            _link.Clear();
+            _link.IsConnected = true;
+            OperateSafetyLatch.Clear();
+            _profile.HasArm = false;
+            _profile.ArmDof = 0;
+
+            var host = new GameObject("pending-estop-" + source);
+            try
+            {
+                var teleop = host.AddComponent<TeleopController>();
+                typeof(TeleopController).GetField("_link", BindingFlags.Instance | BindingFlags.NonPublic)
+                    .SetValue(teleop, _link);
+                SetEndpoint(teleop, "10.0.0.9:9090");
+                PreflightGate.Allow();
+
+                teleop.StartTeleop(_profile);
+                var first = DriveOf(teleop);
+
+                _link.IsConnected = false;
+                _link.Clear();
+                first.Tick(ref stop, _link);
+                Assert.IsTrue(first.IsEmergencyStopActive, source);
+                Assert.IsTrue(first.EmergencyStopPublishPending, source);
+                Assert.AreEqual(0, CountEStop(true), source);
+
+                // Chord released. The rebuild has to keep the unpublished stop.
+                teleop.StartTeleop(_profile);
+                var second = DriveOf(teleop);
+                Assert.AreNotSame(first, second, source);
+                Assert.IsTrue(second.IsEmergencyStopActive, source);
+                Assert.IsTrue(second.EmergencyStopPublishPending, source + " rebuild keeps the unpublished stop");
+                Assert.AreEqual(0, CountEStop(true), source);
+
+                _link.IsConnected = true;
+                var drive = new TeleopInput
+                {
+                    LeftGrip = true,
+                    LeftStick = new Vector2(0f, 1f),
+                    DeltaTime = 0.1f
+                };
+                second.Tick(ref drive, _link);
+                Assert.IsTrue(second.IsEmergencyStopActive, source);
+                Assert.IsFalse(second.EmergencyStopPublishPending, source);
+                Assert.IsTrue(PublishedEStop(true), source + " reconnect publishes the stop");
+                Assert.IsFalse(PublishedEStop(false), source);
+                AssertNoDriving(_link);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(host);
+            }
+        }
+
         void FinishDeadmanClear(DriveSchemeBase scheme)
         {
             var reset = new TeleopInput { ResetEmergencyStop = true, LeftGrip = true, DeltaTime = 0.1f };
@@ -1121,11 +1284,19 @@ namespace OmniBot.VR.Tests
 
                 bool yielded = false;
                 teleop.EmergencyStopChanged += active => yielded = active;
-                typeof(TeleopController).GetMethod(
-                        "NotifyEmergencyStopEdges",
-                        BindingFlags.Instance | BindingFlags.NonPublic)
-                    .Invoke(teleop, new object[] { new TeleopInput { HudEmergencyStop = true } });
+                var notify = typeof(TeleopController).GetMethod(
+                    "NotifyEmergencyStopEdges",
+                    BindingFlags.Instance | BindingFlags.NonPublic);
+                notify.Invoke(teleop, new object[] { new TeleopInput { HudEmergencyStop = true } });
                 Assert.IsTrue(yielded, "HUD e-stop on the control frame yields the policy");
+
+                yielded = false;
+                notify.Invoke(teleop, new object[] { new TeleopInput { EmergencyStopPressed = true } });
+                Assert.IsTrue(yielded, "A+B on the control frame yields the policy");
+
+                yielded = false;
+                notify.Invoke(teleop, new object[] { new TeleopInput { BothGripsPressed = true } });
+                Assert.IsTrue(yielded, "Both grips on the control frame yield the policy");
             }
             finally
             {

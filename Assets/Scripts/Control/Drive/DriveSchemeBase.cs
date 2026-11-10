@@ -70,6 +70,12 @@ namespace OmniBot.VR.Control.Drive
         public bool IsEmergencyStopActive => EmergencyStopActive;
 
         /// <summary>
+        /// True when the latch was taken while the link could not accept
+        /// <c>emergency_stop</c> true. The next connected tick publishes it.
+        /// </summary>
+        public bool EmergencyStopPublishPending => _estopPublishPending;
+
+        /// <summary>
         /// When true, the left grip must be held to drive. Releasing it publishes
         /// zero velocity on that same tick. Defaults to true. Assigning false is
         /// ignored unless the configured profile is a kind=sim session; call
@@ -329,14 +335,17 @@ namespace OmniBot.VR.Control.Drive
         }
 
         /// <summary>
-        /// Re-apply a latch that was active on the scheme this one replaces.
-        /// Does not publish. The robot already has the stop; the next explicit
-        /// reset is what publishes false.
+        /// Re-apply a latch from the scheme this one replaces.
+        /// <paramref name="publishPending"/> is true when that stop never reached
+        /// the robot. The next connected tick publishes <c>emergency_stop</c> true.
+        /// A stop the robot already holds is restored with
+        /// <paramref name="publishPending"/> false and does not publish.
         /// </summary>
-        public void RestoreEmergencyStopLatch()
+        public void RestoreEmergencyStopLatch(bool publishPending = false)
         {
             EmergencyStopActive = true;
             IsPublishing = false;
+            _estopPublishPending = publishPending;
         }
 
         /// <summary>
@@ -491,7 +500,7 @@ namespace OmniBot.VR.Control.Drive
         /// Publish a stop that was latched during a drop. Does not restart the
         /// clear cycle, so a Reset already in progress is left alone.
         /// </summary>
-        private void FlushPendingEmergencyStop(IRobotLink link)
+        protected void FlushPendingEmergencyStop(IRobotLink link)
         {
             if (!_estopPublishPending || !EmergencyStopActive) return;
             if (link == null || !link.IsConnected) return;
