@@ -38,6 +38,7 @@ namespace OmniBot.VR.Tests
             var profile = RobotProfileFactory.FromGarageRobot(OmniBot("omnibot"));
 
             Assert.IsNotNull(profile);
+            Assert.AreEqual("user-robot", profile.UserRobotId);
             Assert.AreEqual("/arm/joint_commands/teleop", profile.Topics.ArmCommands);
         }
 

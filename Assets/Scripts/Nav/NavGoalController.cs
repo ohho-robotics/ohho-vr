@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.EventSystems;
@@ -30,6 +31,7 @@ namespace OmniBot.VR.Nav
         private Texture2D _planTex;
         private OccupancyMap _drawnMap;
         private int _drawnPlanCount = -1;
+        private List<NamedWaypoint> _drawnWaypoints;
 
         public static void Ensure(MonoBehaviour host)
         {
@@ -166,15 +168,77 @@ namespace OmniBot.VR.Nav
             }
             if (_mapLabel != null)
                 _mapLabel.text = _session.Map == null ? "Waiting for /map" : "Tap the map to send a goal";
-            RebuildWaypointButtons();
+            // Feedback, /plan, and mode echo all raise Changed. Rebuilding the
+            // buttons on those drops a tap aimed at a button that is already gone.
+            if (WaypointCatalogChanged())
+                RebuildWaypointButtons();
             RedrawMap();
+        }
+
+        internal void BuildUiForTests()
+        {
+            BuildUi();
+            Refresh();
+        }
+
+        internal void RefreshForTests() => Refresh();
+
+        private bool WaypointCatalogChanged()
+        {
+            IReadOnlyList<NamedWaypoint> waypoints = _session.Waypoints;
+            if (_drawnWaypoints == null || _drawnWaypoints.Count != waypoints.Count)
+                return true;
+            for (int i = 0; i < waypoints.Count; i++)
+            {
+                if (!SameWaypoint(_drawnWaypoints[i], waypoints[i]))
+                    return true;
+            }
+            return false;
+        }
+
+        private static bool SameWaypoint(NamedWaypoint drawn, NamedWaypoint live)
+        {
+            if (ReferenceEquals(drawn, live)) return true;
+            if (drawn == null || live == null) return false;
+            return string.Equals(drawn.Name, live.Name, StringComparison.Ordinal)
+                && string.Equals(drawn.FrameId, live.FrameId, StringComparison.Ordinal)
+                && drawn.X == live.X && drawn.Y == live.Y && drawn.Z == live.Z
+                && drawn.Qx == live.Qx && drawn.Qy == live.Qy && drawn.Qz == live.Qz
+                && drawn.Qw == live.Qw;
+        }
+
+        private void RememberDrawnWaypoints()
+        {
+            IReadOnlyList<NamedWaypoint> waypoints = _session.Waypoints;
+            _drawnWaypoints = new List<NamedWaypoint>(waypoints.Count);
+            for (int i = 0; i < waypoints.Count; i++)
+            {
+                NamedWaypoint wp = waypoints[i];
+                if (wp == null)
+                {
+                    _drawnWaypoints.Add(null);
+                    continue;
+                }
+                _drawnWaypoints.Add(new NamedWaypoint
+                {
+                    Name = wp.Name,
+                    FrameId = wp.FrameId,
+                    X = wp.X,
+                    Y = wp.Y,
+                    Z = wp.Z,
+                    Qx = wp.Qx,
+                    Qy = wp.Qy,
+                    Qz = wp.Qz,
+                    Qw = wp.Qw,
+                });
+            }
         }
 
         private void RebuildWaypointButtons()
         {
             if (_waypointRoot == null) return;
             for (int i = _waypointRoot.childCount - 1; i >= 0; i--)
-                Destroy(_waypointRoot.GetChild(i).gameObject);
+                DestroyUi(_waypointRoot.GetChild(i).gameObject);
 
             var font = FindFont();
             IReadOnlyList<NamedWaypoint> waypoints = _session.Waypoints;
@@ -192,6 +256,14 @@ namespace OmniBot.VR.Nav
                 var captured = wp;
                 button.onClick.AddListener(() => _session.SendGoal(captured));
             }
+            RememberDrawnWaypoints();
+        }
+
+        private static void DestroyUi(UnityEngine.Object obj)
+        {
+            if (obj == null) return;
+            if (Application.isPlaying) Destroy(obj);
+            else DestroyImmediate(obj);
         }
 
         internal void OnMapClicked(float localX, float localY, float width, float height)

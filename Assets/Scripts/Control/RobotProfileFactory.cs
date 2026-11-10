@@ -57,6 +57,7 @@ namespace OmniBot.VR.Control
             ApplyFlagshipOverride(profile, modelId, category);
             profile.DeploymentKind = RobotDeployment.FromUserRobot(robot.UserRobot);
             profile.Deployment = ArmDeploymentRules.FromGarageStatus(robot.UserRobot != null ? robot.UserRobot.Status : null);
+            profile.UserRobotId = robot.UserRobot != null ? robot.UserRobot.Id : null;
             profile.MaxJointDeltaRad = RobotDescriptor.MaxJointDeltaRad;
             bool so101Family = modelId == "so101-arm" || modelId == "omnibot" || modelId == "omnibot-pro";
             profile.JointZerosCalibrated = so101Family && So101JointZeroConfig.Load().Calibrated;
@@ -225,6 +226,7 @@ namespace OmniBot.VR.Control
                     ? catalogFallback.DeploymentKind
                     : RobotDeployment.Real,
                 Deployment = sameRobot ? catalogFallback.Deployment : ArmDeployment.Real,
+                UserRobotId = sameRobot ? catalogFallback.UserRobotId : null,
                 CapsFromDescriptor = true,
                 PolicyModelsFallback = sameRobot && !string.IsNullOrEmpty(catalogFallback.PolicyModelsFallback)
                     ? catalogFallback.PolicyModelsFallback

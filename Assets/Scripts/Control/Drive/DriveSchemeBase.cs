@@ -123,7 +123,7 @@ namespace OmniBot.VR.Control.Drive
             _mode.Reset(IdleMode, profile != null ? profile.DeploymentKind : RobotDeployment.Real);
             _mode.ActiveMode = ActiveMode;
             if (profile != null)
-                NavGoalSession.Active.SetDeployment(profile.DeploymentKind);
+                NavGoalSession.Active.BeginRobot(profile);
             _publishEStopClear = false;
             // Null profile keeps the safe default (deadman on). An explicit false
             // only sticks in the editor/simulator.

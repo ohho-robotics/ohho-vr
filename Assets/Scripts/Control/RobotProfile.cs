@@ -54,6 +54,12 @@ namespace OmniBot.VR.Control
         // ── Identity ──────────────────────────────────────────────────────────
         public string RobotId;          // hardware model id (e.g. "omnibot-pro")
         public string Name;
+
+        /// <summary>
+        /// Garage <c>user_robots.id</c>. Two robots can share <see cref="RobotId"/>.
+        /// Empty when the profile was not built from a garage row.
+        /// </summary>
+        public string UserRobotId;
         public string Manufacturer;
         public string Category;         // catalog category id
 

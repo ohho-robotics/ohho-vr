@@ -36,6 +36,7 @@ namespace OmniBot.VR.Nav
 
         private readonly List<NamedWaypoint> _waypoints = WaypointCatalog.ApartmentContract();
         private string _goalId;
+        private string _robotKey;
 
         public IReadOnlyList<NamedWaypoint> Waypoints => _waypoints;
 
@@ -43,7 +44,47 @@ namespace OmniBot.VR.Nav
         {
             Changed = null;
             Transport = null;
+            _robotKey = null;
             DeploymentKind = RobotDeployment.Real;
+            ClearNavigation();
+        }
+
+        public void SetDeployment(string kind)
+        {
+            DeploymentKind = RobotDeployment.Normalize(kind);
+            Changed?.Invoke();
+        }
+
+        /// <summary>
+        /// Teleop is starting on <paramref name="profile"/>. The same robot keeps
+        /// its map, waypoints, and goal. A different robot drops them so the
+        /// next catalog and <c>/map</c> belong to the robot that is starting.
+        /// </summary>
+        public void BeginRobot(RobotProfile profile)
+        {
+            if (profile == null) return;
+            string key = RobotKey(profile);
+            if (_robotKey == null || string.Equals(_robotKey, key, StringComparison.Ordinal))
+            {
+                _robotKey = key;
+                SetDeployment(profile.DeploymentKind);
+                return;
+            }
+
+            ClearNavigation();
+            _robotKey = key;
+            SetDeployment(profile.DeploymentKind);
+        }
+
+        private static string RobotKey(RobotProfile profile)
+        {
+            if (!string.IsNullOrEmpty(profile.UserRobotId))
+                return "user:" + profile.UserRobotId;
+            return "model:" + (profile.RobotId ?? "");
+        }
+
+        private void ClearNavigation()
+        {
             GoalActive = false;
             ObservedMode = "teleop";
             StatusText = "idle";
@@ -56,12 +97,6 @@ namespace OmniBot.VR.Nav
             _goalId = null;
             _waypoints.Clear();
             _waypoints.AddRange(WaypointCatalog.ApartmentContract());
-        }
-
-        public void SetDeployment(string kind)
-        {
-            DeploymentKind = RobotDeployment.Normalize(kind);
-            Changed?.Invoke();
         }
 
         public void NoteModePublished(string mode)

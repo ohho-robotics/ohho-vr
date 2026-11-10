@@ -2,7 +2,12 @@ using System.Collections.Generic;
 using System.Linq;
 using Newtonsoft.Json.Linq;
 using NUnit.Framework;
+using TMPro;
+using UnityEngine;
+using UnityEngine.UI;
 using OmniBot.VR.Control;
+using OmniBot.VR.Control.Preflight;
+using OmniBot.VR.Control.Session;
 using OmniBot.VR.Core;
 using OmniBot.VR.Core.Platform;
 using OmniBot.VR.Nav;
@@ -424,6 +429,154 @@ waypoints:
         }
 
         [Test]
+        public void WaypointButtons_RebuildOnlyWhenCatalogChanges()
+        {
+            var host = new GameObject("nav-waypoint-buttons");
+            host.SetActive(false);
+            try
+            {
+                var panel = host.AddComponent<NavGoalController>();
+                panel.BuildUiForTests();
+                Button[] buttons = WaypointButtons(host);
+                Assert.AreEqual(4, buttons.Length);
+
+                _session.HandlePlan(
+                    "{\"header\":{\"frame_id\":\"map\"},\"poses\":["
+                    + "{\"pose\":{\"position\":{\"x\":0,\"y\":0}}},"
+                    + "{\"pose\":{\"position\":{\"x\":3,\"y\":4}}}]}");
+                _session.HandleModeEcho("{\"data\":\"nav2\"}");
+                Assert.IsTrue(_session.SendGoal(_session.Waypoints.First(w => w.Name == "kitchen")));
+                string goalId = JObject.Parse(_transport.Raw.Find(j => j.Contains("send_action_goal")))["id"].ToString();
+                _session.HandleProtocol(
+                    "{\"op\":\"action_feedback\",\"id\":\"" + goalId + "\",\"action\":\"navigate_to_pose\",\"values\":{"
+                    + "\"estimated_time_remaining\":{\"sec\":4,\"nanosec\":0},"
+                    + "\"distance_remaining\":1.25}}");
+                panel.RefreshForTests();
+
+                var status = host.transform.Find("Nav2 Panel/Nav Status").GetComponent<TMP_Text>();
+                StringAssert.Contains("ETA 4.0 s", status.text);
+                StringAssert.Contains("kitchen", status.text);
+                Assert.AreEqual("Waypoints: apartment contract",
+                    host.transform.Find("Nav2 Panel/Nav Source").GetComponent<TMP_Text>().text);
+                Button[] kept = WaypointButtons(host);
+                Assert.AreEqual(buttons.Length, kept.Length);
+                for (int i = 0; i < buttons.Length; i++)
+                    Assert.AreSame(buttons[i], kept[i]);
+
+                string payload = "{\"locations\":{\"dock\":{\"x\":1,\"y\":2,\"yaw\":0}}}";
+                string frame = "{\"op\":\"service_response\",\"id\":\"" + NavMessages.ListServiceId
+                    + "\",\"result\":true,\"values\":{\"success\":true,\"message\":" + JsonString(payload) + "}}";
+                _session.HandleProtocol(frame);
+                panel.RefreshForTests();
+
+                Button[] rebuilt = WaypointButtons(host);
+                Assert.AreEqual(1, rebuilt.Length);
+                Assert.AreNotSame(buttons[0], rebuilt[0]);
+                Assert.AreEqual("dock",
+                    host.transform.Find("Nav2 Panel/Waypoint Buttons").GetChild(0)
+                        .GetComponentInChildren<TMP_Text>().text);
+                Assert.AreEqual("Waypoints: robot",
+                    host.transform.Find("Nav2 Panel/Nav Source").GetComponent<TMP_Text>().text);
+            }
+            finally
+            {
+                Object.DestroyImmediate(host);
+            }
+        }
+
+        [Test]
+        public void Configure_SameRobot_KeepsNav_OtherRobot_ClearsIt()
+        {
+            var garageA = Garage("simulated", null);
+            garageA.UserRobot.Id = "user-a";
+            var garageB = Garage("active", "real");
+            garageB.UserRobot.Id = "user-b";
+            var profileA = RobotProfileFactory.FromGarageRobot(garageA);
+            var profileB = RobotProfileFactory.FromGarageRobot(garageB);
+            Assert.AreEqual("user-a", profileA.UserRobotId);
+            Assert.AreEqual("user-b", profileB.UserRobotId);
+            Assert.AreEqual(profileA.RobotId, profileB.RobotId);
+
+            var scheme = ControlSchemeFactory.CreateDriveScheme(profileA);
+            Assert.IsNotNull(scheme);
+            const string map = "{\"info\":{\"width\":1,\"height\":1,\"resolution\":0.05,\"origin\":{\"position\":{\"x\":1,\"y\":2}}},\"data\":[0]}";
+            _session.HandleMap(map);
+            string payload = "{\"locations\":{\"lab\":{\"x\":4,\"y\":5,\"yaw\":0}}}";
+            _session.HandleProtocol("{\"op\":\"service_response\",\"id\":\"" + NavMessages.ListServiceId
+                + "\",\"result\":true,\"values\":{\"success\":true,\"message\":" + JsonString(payload) + "}}");
+            Assert.IsTrue(_session.SendGoal(_session.Waypoints.First(w => w.Name == "lab")));
+            string goalId = JObject.Parse(_transport.Raw.Find(j => j.Contains("send_action_goal")))["id"].ToString();
+            _session.HandleModeEcho("{\"data\":\"nav2\"}");
+            _session.HandlePlan(
+                "{\"header\":{\"frame_id\":\"map\"},\"poses\":["
+                + "{\"pose\":{\"position\":{\"x\":0,\"y\":0}}},"
+                + "{\"pose\":{\"position\":{\"x\":1,\"y\":0}}}]}");
+
+            scheme.Configure(profileA);
+            Assert.IsTrue(_session.GoalActive);
+            Assert.IsNotNull(_session.Map);
+            Assert.IsNotNull(_session.Plan);
+            Assert.AreEqual("nav2", _session.ObservedMode);
+            Assert.AreEqual("robot", _session.WaypointSource);
+            Assert.AreEqual("lab", _session.GoalName);
+            Assert.AreEqual(RobotDeployment.Sim, _session.DeploymentKind);
+
+            scheme.Configure(profileB);
+            Assert.IsFalse(_session.GoalActive);
+            Assert.IsNull(_session.Map);
+            Assert.IsNull(_session.Plan);
+            Assert.AreEqual("teleop", _session.ObservedMode);
+            Assert.AreEqual("apartment contract", _session.WaypointSource);
+            Assert.IsNull(_session.GoalName);
+            Assert.AreEqual("idle", _session.StatusText);
+            Assert.AreEqual(RobotDeployment.Real, _session.DeploymentKind);
+            Assert.AreEqual(-1.9, _session.Waypoints.First(w => w.Name == "kitchen").X, 1e-6);
+            _session.HandleProtocol(
+                "{\"op\":\"action_feedback\",\"id\":\"" + goalId + "\",\"values\":{\"distance_remaining\":1.5}}");
+            Assert.IsNull(_session.DistanceRemaining);
+            Assert.IsFalse(_session.GoalActive);
+        }
+
+        [Test]
+        public void StartTeleop_FixedBaseOtherRobot_ClearsNavSession()
+        {
+            bool blocked = PreflightGate.BlocksMotion;
+            PreflightGate.Allow();
+            var host = new GameObject("nav-fixed-base-switch");
+            try
+            {
+                var first = DriveProfile(RobotDeployment.Sim);
+                first.UserRobotId = "user-a";
+                var scheme = ControlSchemeFactory.CreateDriveScheme(first);
+                Assert.IsNotNull(scheme);
+                _session.HandleMap(
+                    "{\"info\":{\"width\":1,\"height\":1,\"resolution\":0.05,\"origin\":{\"position\":{\"x\":0,\"y\":0}}},\"data\":[0]}");
+                Assert.IsTrue(_session.SendGoal(_session.Waypoints.First(w => w.Name == "kitchen")));
+                _session.HandleModeEcho("{\"data\":\"nav2\"}");
+
+                var teleop = host.AddComponent<TeleopController>();
+                teleop.SetLink(_link);
+                var second = DriveProfile(RobotDeployment.Real);
+                second.UserRobotId = "user-b";
+                second.Drive = DriveKind.FixedBase;
+                second.BaseDof = 0;
+                second.HasArm = false;
+                teleop.StartTeleop(second);
+
+                Assert.IsFalse(_session.GoalActive);
+                Assert.IsNull(_session.Map);
+                Assert.AreEqual("teleop", _session.ObservedMode);
+                Assert.AreEqual("apartment contract", _session.WaypointSource);
+                Assert.AreEqual(RobotDeployment.Real, _session.DeploymentKind);
+            }
+            finally
+            {
+                Object.DestroyImmediate(host);
+                if (blocked) PreflightGate.Hold(SessionKind.Real);
+            }
+        }
+
+        [Test]
         public void RequestWaypointList_CallsParamAndService()
         {
             _session.RequestWaypointList();
@@ -497,6 +650,15 @@ waypoints:
                 RobotType = new VrRobotType { Id = "omnibot", Name = "OmniBot" },
                 Category = new VrCategory { Id = "mobile-manipulator" },
             };
+        }
+
+        private static Button[] WaypointButtons(GameObject host)
+        {
+            var root = host.transform.Find("Nav2 Panel/Waypoint Buttons");
+            var buttons = new Button[root.childCount];
+            for (int i = 0; i < root.childCount; i++)
+                buttons[i] = root.GetChild(i).GetComponent<Button>();
+            return buttons;
         }
 
         private static string JsonString(string value)

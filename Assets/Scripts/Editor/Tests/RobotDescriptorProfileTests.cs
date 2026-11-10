@@ -165,6 +165,22 @@ namespace OmniBot.VR.Tests
         }
 
         [Test]
+        public void FromDescriptor_SameRobot_KeepsGarageUserId()
+        {
+            var catalog = new RobotProfile { RobotId = "omnibot", UserRobotId = "user-a" };
+            var profile = RobotProfileFactory.FromDescriptor(Load("omnibot.descriptor.json"), catalog);
+            Assert.AreEqual("user-a", profile.UserRobotId);
+        }
+
+        [Test]
+        public void FromDescriptor_OtherRobot_DropsGarageUserId()
+        {
+            var catalog = new RobotProfile { RobotId = "ur5e", UserRobotId = "user-a" };
+            var profile = RobotProfileFactory.FromDescriptor(Load("omnibot.descriptor.json"), catalog);
+            Assert.IsTrue(string.IsNullOrEmpty(profile.UserRobotId));
+        }
+
+        [Test]
         public void FromDescriptor_OtherRobot_DoesNotCopyCatalogCommandTopics()
         {
             var catalog = new RobotProfile
