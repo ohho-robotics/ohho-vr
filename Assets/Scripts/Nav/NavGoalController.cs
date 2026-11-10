@@ -59,8 +59,8 @@ namespace OmniBot.VR.Nav
             if (_ros != null) _ros.OnProtocolMessage -= OnProtocol;
             var conn = ConnectionManager.Instance;
             if (conn != null) conn.OnConnectionStateChanged -= OnConnection;
-            if (_mapTex != null) Destroy(_mapTex);
-            if (_planTex != null) Destroy(_planTex);
+            DestroyUi(_mapTex);
+            DestroyUi(_planTex);
         }
 
         private void HookRos()
@@ -127,12 +127,15 @@ namespace OmniBot.VR.Nav
 
             _mapImage = NewRect("Map Image", panel.transform).AddComponent<RawImage>();
             _mapImage.color = new Color(0.15f, 0.17f, 0.22f, 1f);
+            // No grid yet. A tap must not land on the placeholder.
+            _mapImage.raycastTarget = false;
             Place(_mapImage.rectTransform, new Vector2(0f, 1f), new Vector2(280f, 280f), new Vector2(250f, -160f));
             var click = _mapImage.gameObject.AddComponent<MapClickRelay>();
             click.Owner = this;
 
             _planImage = NewRect("Plan Image", _mapImage.transform).AddComponent<RawImage>();
             _planImage.raycastTarget = false;
+            _planImage.enabled = false;
             _planImage.color = Color.white;
             Stretch(_planImage.rectTransform);
 
@@ -275,12 +278,21 @@ namespace OmniBot.VR.Nav
 
         private void RedrawMap()
         {
+            if (_mapImage == null) return;
             var map = _session.Map;
-            if (map == null || _mapImage == null) return;
+            // Robot switch nulls Map. Leaving the old textures up shows the
+            // previous robot's grid and still accepts taps on it.
+            if (map == null)
+            {
+                ClearDrawnMap();
+                return;
+            }
+
+            _mapImage.raycastTarget = true;
             if (!ReferenceEquals(map, _drawnMap))
             {
                 _drawnMap = map;
-                if (_mapTex != null) Destroy(_mapTex);
+                DestroyUi(_mapTex);
                 _mapTex = new Texture2D(map.Width, map.Height, TextureFormat.RGBA32, false)
                 {
                     filterMode = FilterMode.Point,
@@ -306,7 +318,7 @@ namespace OmniBot.VR.Nav
             _drawnPlanCount = count;
             if (_planTex == null || _planTex.width != map.Width || _planTex.height != map.Height)
             {
-                if (_planTex != null) Destroy(_planTex);
+                DestroyUi(_planTex);
                 _planTex = new Texture2D(map.Width, map.Height, TextureFormat.RGBA32, false)
                 {
                     filterMode = FilterMode.Point,
@@ -328,7 +340,30 @@ namespace OmniBot.VR.Nav
                 }
             }
             _planTex.Apply(false);
-            if (_planImage != null) _planImage.texture = _planTex;
+            if (_planImage != null)
+            {
+                _planImage.texture = _planTex;
+                _planImage.enabled = true;
+            }
+        }
+
+        private void ClearDrawnMap()
+        {
+            _drawnMap = null;
+            _drawnPlanCount = -1;
+            _mapImage.texture = null;
+            _mapImage.raycastTarget = false;
+            if (_planImage != null)
+            {
+                _planImage.texture = null;
+                // A RawImage with no texture still paints its color. Disable it
+                // so the cleared overlay does not cover the placeholder.
+                _planImage.enabled = false;
+            }
+            DestroyUi(_mapTex);
+            DestroyUi(_planTex);
+            _mapTex = null;
+            _planTex = null;
         }
 
         private static void StampLine(Texture2D tex, int x0, int y0, int x1, int y1, Color color)

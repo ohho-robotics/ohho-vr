@@ -577,6 +577,101 @@ waypoints:
         }
 
         [Test]
+        public void MapOverlay_RobotSwitch_ClearsGridAndDisablesTaps()
+        {
+            const string mapJson = "{\"info\":{\"width\":2,\"height\":2,\"resolution\":0.05,\"origin\":{\"position\":{\"x\":0,\"y\":0}}},\"data\":[0,0,0,100]}";
+            const string planJson = "{\"header\":{\"frame_id\":\"map\"},\"poses\":["
+                + "{\"pose\":{\"position\":{\"x\":0.025,\"y\":0.025}}},"
+                + "{\"pose\":{\"position\":{\"x\":0.075,\"y\":0.025}}}]}";
+            var host = new GameObject("nav-map-overlay");
+            host.SetActive(false);
+            try
+            {
+                var first = DriveProfile(RobotDeployment.Sim);
+                first.UserRobotId = "user-a";
+                var second = DriveProfile(RobotDeployment.Real);
+                second.UserRobotId = "user-b";
+                _session.BeginRobot(first);
+
+                var panel = host.AddComponent<NavGoalController>();
+                panel.BuildUiForTests();
+                var mapImage = host.transform.Find("Nav2 Panel/Map Image").GetComponent<RawImage>();
+                var planImage = mapImage.transform.Find("Plan Image").GetComponent<RawImage>();
+                var label = host.transform.Find("Nav2 Panel/Map Label").GetComponent<TMP_Text>();
+                Assert.AreEqual("Waiting for /map", label.text);
+                Assert.IsNull(mapImage.texture);
+                Assert.IsFalse(mapImage.raycastTarget);
+                Assert.IsNull(planImage.texture);
+                Assert.IsFalse(planImage.enabled);
+                Assert.AreEqual(0, GoalSends());
+                panel.OnMapClicked(10f, 5f, 40f, 20f);
+                Assert.AreEqual(0, GoalSends());
+
+                _session.HandleMap(mapJson);
+                _session.HandlePlan(planJson);
+                panel.RefreshForTests();
+
+                var mapTex = (Texture2D)mapImage.texture;
+                var planTex = (Texture2D)planImage.texture;
+                Assert.IsNotNull(mapTex);
+                Assert.AreEqual(2, mapTex.width);
+                Assert.AreEqual(2, mapTex.height);
+                Assert.Greater(mapTex.GetPixel(0, 0).r, 0.8f);
+                Assert.Less(mapTex.GetPixel(1, 1).r, 0.2f);
+                Assert.IsNotNull(planTex);
+                Assert.Greater(planTex.GetPixel(0, 0).b, 0.5f);
+                Assert.IsTrue(mapImage.raycastTarget);
+                Assert.IsTrue(planImage.enabled);
+                Assert.AreEqual("Tap the map to send a goal", label.text);
+
+                _session.HandleModeEcho("{\"data\":\"nav2\"}");
+                _session.HandlePlan(planJson);
+                panel.RefreshForTests();
+                Assert.AreSame(mapTex, mapImage.texture);
+                Assert.AreSame(planTex, planImage.texture);
+                Assert.IsTrue(mapImage.raycastTarget);
+
+                _session.BeginRobot(first);
+                panel.RefreshForTests();
+                Assert.AreSame(mapTex, mapImage.texture);
+                Assert.AreSame(planTex, planImage.texture);
+                Assert.IsTrue(mapImage.raycastTarget);
+                Assert.AreEqual("Tap the map to send a goal", label.text);
+
+                _session.BeginRobot(second);
+                panel.RefreshForTests();
+                Assert.IsNull(_session.Map);
+                Assert.IsNull(_session.Plan);
+                Assert.IsNull(mapImage.texture);
+                Assert.IsFalse(mapImage.raycastTarget);
+                Assert.IsNull(planImage.texture);
+                Assert.IsFalse(planImage.enabled);
+                Assert.AreEqual("Waiting for /map", label.text);
+                Assert.AreEqual("Real robots stay in teleop when idle. Nav2 starts from this button or a goal.",
+                    host.transform.Find("Nav2 Panel/Nav Hint").GetComponent<TMP_Text>().text);
+                panel.OnMapClicked(10f, 5f, 40f, 20f);
+                Assert.AreEqual(0, GoalSends());
+                Assert.IsFalse(_session.GoalActive);
+
+                _session.HandleMap(mapJson);
+                panel.RefreshForTests();
+                Assert.IsNotNull(mapImage.texture);
+                Assert.AreNotSame(mapTex, mapImage.texture);
+                Assert.IsTrue(mapImage.raycastTarget);
+                Assert.IsTrue(planImage.enabled);
+                Assert.AreEqual("Tap the map to send a goal", label.text);
+                panel.OnMapClicked(10f, 5f, 40f, 20f);
+                Assert.AreEqual(1, GoalSends());
+                Assert.IsTrue(_session.GoalActive);
+                Assert.AreEqual("map", _session.GoalName);
+            }
+            finally
+            {
+                Object.DestroyImmediate(host);
+            }
+        }
+
+        [Test]
         public void RequestWaypointList_CallsParamAndService()
         {
             _session.RequestWaypointList();
@@ -650,6 +745,11 @@ waypoints:
                 RobotType = new VrRobotType { Id = "omnibot", Name = "OmniBot" },
                 Category = new VrCategory { Id = "mobile-manipulator" },
             };
+        }
+
+        private int GoalSends()
+        {
+            return _transport.Raw.Count(j => j.Contains("send_action_goal"));
         }
 
         private static Button[] WaypointButtons(GameObject host)
