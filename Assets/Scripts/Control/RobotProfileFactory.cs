@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Newtonsoft.Json.Linq;
 using OmniBot.VR.Core;
 using OmniBot.VR.Core.Platform;
 using OmniBot.VR.Nav;
@@ -115,14 +116,19 @@ namespace OmniBot.VR.Control
 
             var hard = descriptor.Safety.Hard;
             var caps = descriptor.Drive.Caps;
-            var drive = ParseDescriptorDrive(descriptor.Drive.Kind);
-            bool fixedBase = drive == DriveKind.FixedBase;
+            var parsedDrive = ParseDescriptorDrive(descriptor.Drive.Kind);
+            var capabilities = DescriptorCapabilitySet.From(descriptor);
+            // No known drive capability means no motion. Do not keep a catalog
+            // category's scheme, and do not guess differential for an unknown kind.
+            bool drives = CapabilitySchemes.TrySelectDrive(capabilities, parsedDrive, out DriveKind selectedDrive);
+            var drive = drives ? selectedDrive : parsedDrive;
+            bool fixedBase = !drives;
             bool sameRobot = SameRobot(catalogFallback, descriptor);
 
             float maxLin = fixedBase ? 0f : Cap(caps.VxMps, hard.MaxVxMps, RobotConfig.MAX_LINEAR_VEL);
             float maxLat = fixedBase ? 0f : Cap(caps.VyMps, hard.MaxVyMps, RobotConfig.MAX_LINEAR_VEL);
             float maxAng = fixedBase ? 0f : Cap(caps.WzRadS, hard.MaxWzRadS, RobotConfig.MAX_ANGULAR_VEL);
-            if (!descriptor.Drive.Holonomic) maxLat = 0f;
+            if (!descriptor.Drive.Holonomic && !capabilities.Holonomic) maxLat = 0f;
 
             if (sameRobot)
             {
@@ -140,6 +146,16 @@ namespace OmniBot.VR.Control
                 catalogFallback.HardJoints.Length == joints.Length)
             {
                 joints = IntersectJoints(joints, catalogFallback.HardJoints);
+            }
+
+            int leftArmOffset = 0;
+            int leftArmCount = 0;
+            int rightArmOffset = 0;
+            int rightArmCount = 0;
+            if (capabilities.DualArm)
+            {
+                TrySplitDualArms(descriptor, joints,
+                    out leftArmOffset, out leftArmCount, out rightArmOffset, out rightArmCount);
             }
 
             var spec = DriveSpecs.Get(drive);
@@ -191,7 +207,7 @@ namespace OmniBot.VR.Control
                 Category = sameRobot ? catalogFallback.Category : "",
                 Drive = drive,
                 DriveLabel = spec.Label,
-                Holonomic = descriptor.Drive.Holonomic && !fixedBase,
+                Holonomic = (descriptor.Drive.Holonomic || capabilities.Holonomic) && !fixedBase,
                 BaseDof = fixedBase ? 0 : spec.BaseDof,
                 BaseActionLabels = spec.ActionLabels,
                 MaxLinVel = maxLin,
@@ -211,12 +227,18 @@ namespace OmniBot.VR.Control
                 Joints = joints,
                 HardJoints = CloneJoints(joints),
                 CanNavigate = !fixedBase && spec.BaseDof > 0,
-                CanManipulate = hasArm,
-                IsAerial = false,
+                CanManipulate = hasArm && CapabilitySchemes.AllowsManipulation(capabilities),
+                IsAerial = capabilities.Aerial,
                 IsUnderwater = sameRobot && catalogFallback.IsUnderwater,
                 IsStationary = fixedBase || spec.BaseDof == 0,
-                IsLegged = drive == DriveKind.Quadruped || drive == DriveKind.Bipedal,
-                IsDualArm = descriptor.Arms != null && descriptor.Arms.Length > 1,
+                IsLegged = capabilities.LeggedPose || capabilities.HumanoidPosture || capabilities.HumanoidLocomotion
+                    || drive == DriveKind.Quadruped || drive == DriveKind.Hexapod || drive == DriveKind.Bipedal,
+                IsDualArm = capabilities.DualArm || (descriptor.Arms != null && descriptor.Arms.Length > 1),
+                LeftArmJointOffset = leftArmOffset,
+                LeftArmJointCount = leftArmCount,
+                RightArmJointOffset = rightArmOffset,
+                RightArmJointCount = rightArmCount,
+                Capabilities = capabilities,
                 IkLocation = ik,
                 Topics = topics,
                 HandWorkspaceRadius = workspace,
@@ -641,6 +663,139 @@ namespace OmniBot.VR.Control
             if (value < min) return min;
             if (value > max) return max;
             return value;
+        }
+
+        /// <summary>
+        /// Locate each arm inside the concatenated joint list. A
+        /// <c>manipulation.dual_arm</c> name that matches one side is kept, and
+        /// the other arm is the remaining span. Arm and joint side tokens identify
+        /// a side when the capability name does not. An unlabeled pair, one arm
+        /// named for both sides, or a side that would drive a right arm with the
+        /// left hand is refused.
+        /// </summary>
+        private static bool TrySplitDualArms(
+            LatchedRobotDescriptor descriptor,
+            JointSpec[] flat,
+            out int leftOffset,
+            out int leftCount,
+            out int rightOffset,
+            out int rightCount)
+        {
+            leftOffset = 0;
+            leftCount = 0;
+            rightOffset = 0;
+            rightCount = 0;
+            if (descriptor?.Arms == null || flat == null || flat.Length == 0) return false;
+
+            var spans = new List<ArmSpan>();
+            int offset = 0;
+            foreach (var arm in descriptor.Arms)
+            {
+                if (arm?.Joints == null || arm.Joints.Length == 0) continue;
+                int count = arm.Joints.Length;
+                if (offset + count > flat.Length) return false;
+                spans.Add(new ArmSpan
+                {
+                    Name = arm.Name,
+                    Offset = offset,
+                    Count = count,
+                    FirstJoint = flat[offset].Name,
+                });
+                offset += count;
+            }
+
+            if (offset != flat.Length || spans.Count < 2) return false;
+
+            int leftIndex = FindArmSpan(spans, DualArmRole(descriptor, "left"), "left");
+            int rightIndex = FindArmSpan(spans, DualArmRole(descriptor, "right"), "right");
+            bool distinct = leftIndex >= 0 && rightIndex >= 0 && leftIndex != rightIndex;
+            if (!distinct && spans.Count == 2)
+            {
+                if (leftIndex >= 0 && rightIndex < 0 && (leftIndex == 0 || leftIndex == 1))
+                {
+                    rightIndex = leftIndex == 0 ? 1 : 0;
+                    distinct = true;
+                }
+                else if (rightIndex >= 0 && leftIndex < 0 && (rightIndex == 0 || rightIndex == 1))
+                {
+                    leftIndex = rightIndex == 0 ? 1 : 0;
+                    distinct = true;
+                }
+            }
+
+            if (!distinct) return false;
+            if (ClaimsSide(spans[leftIndex], "right") || ClaimsSide(spans[rightIndex], "left"))
+                return false;
+
+            leftOffset = spans[leftIndex].Offset;
+            leftCount = spans[leftIndex].Count;
+            rightOffset = spans[rightIndex].Offset;
+            rightCount = spans[rightIndex].Count;
+            return true;
+        }
+
+        private static bool ClaimsSide(ArmSpan span, string side)
+        {
+            return SideMatch(span.Name, side) || SideMatch(span.FirstJoint, side);
+        }
+
+        private static string DualArmRole(LatchedRobotDescriptor descriptor, string role)
+        {
+            var parms = descriptor.CapabilityParams;
+            if (parms == null) return null;
+            var block = parms[CapabilityNames.ManipulationDualArm] as JObject;
+            if (block == null) return null;
+            var token = block[role];
+            if (token == null || token.Type != JTokenType.String) return null;
+            string name = token.Value<string>();
+            return string.IsNullOrEmpty(name) ? null : name;
+        }
+
+        private static int FindArmSpan(List<ArmSpan> spans, string preferredName, string side)
+        {
+            if (!string.IsNullOrEmpty(preferredName))
+            {
+                for (int i = 0; i < spans.Count; i++)
+                {
+                    if (string.Equals(spans[i].Name, preferredName, StringComparison.OrdinalIgnoreCase))
+                        return i;
+                }
+            }
+
+            for (int i = 0; i < spans.Count; i++)
+            {
+                if (SideMatch(spans[i].Name, side) || SideMatch(spans[i].FirstJoint, side))
+                    return i;
+            }
+
+            return -1;
+        }
+
+        private static bool SideMatch(string value, string side)
+        {
+            if (string.IsNullOrEmpty(value) || string.IsNullOrEmpty(side)) return false;
+            if (string.Equals(value, side, StringComparison.OrdinalIgnoreCase)) return true;
+            if (value.StartsWith(side + "_", StringComparison.OrdinalIgnoreCase)) return true;
+            if (value.StartsWith(side + "-", StringComparison.OrdinalIgnoreCase)) return true;
+            if (value.EndsWith("_" + side, StringComparison.OrdinalIgnoreCase)) return true;
+            if (value.EndsWith("-" + side, StringComparison.OrdinalIgnoreCase)) return true;
+            if (string.Equals(side, "left", StringComparison.Ordinal)
+                && (value.StartsWith("l_", StringComparison.OrdinalIgnoreCase)
+                    || value.EndsWith("_l", StringComparison.OrdinalIgnoreCase)))
+                return true;
+            if (string.Equals(side, "right", StringComparison.Ordinal)
+                && (value.StartsWith("r_", StringComparison.OrdinalIgnoreCase)
+                    || value.EndsWith("_r", StringComparison.OrdinalIgnoreCase)))
+                return true;
+            return false;
+        }
+
+        private struct ArmSpan
+        {
+            public string Name;
+            public int Offset;
+            public int Count;
+            public string FirstJoint;
         }
     }
 }

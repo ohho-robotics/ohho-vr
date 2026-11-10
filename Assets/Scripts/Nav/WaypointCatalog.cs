@@ -23,8 +23,9 @@ namespace OmniBot.VR.Nav
     /// <summary>
     /// Reads named waypoints from the robot (ROS param or service payload) and
     /// holds the apartment poses from the Nav2 contract used until that payload
-    /// arrives. Poses match omnibot_navigation <c>waypoints.yaml</c> (kitchen,
-    /// desk, door) and omnibot_hybrid <c>named_locations.yaml</c> (home).
+    /// arrives. Kitchen, desk, and door match the navigation <c>waypoints.yaml</c>;
+    /// home matches the hybrid <c>named_locations.yaml</c>. The same list is the
+    /// fallback for every robot until that robot sends its own catalog.
     /// </summary>
     public static class WaypointCatalog
     {

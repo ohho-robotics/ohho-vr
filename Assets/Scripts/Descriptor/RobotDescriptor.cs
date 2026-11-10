@@ -42,6 +42,12 @@ namespace OmniBot.VR.Descriptor
         [JsonProperty("safety", Required = Required.Always)] public DescriptorSafety Safety { get; set; }
 
         /// <summary>
+        /// Optional capability parameters from ohho.descriptor.v1. Older documents omit it.
+        /// Scheme selection reads the names. An unknown name does not select a scheme.
+        /// </summary>
+        public JObject CapabilityParams { get; set; }
+
+        /// <summary>
         /// Parse a descriptor document or a rosbridge <c>std_msgs/String</c> whose
         /// <c>data</c> field holds that document. Returns false on any schema failure.
         /// A failure must be treated as "no descriptor", never as unlimited motion.
@@ -66,6 +72,7 @@ namespace OmniBot.VR.Descriptor
                     return false;
                 }
 
+                JObject capabilityParams = DetachCapabilityParams(root);
                 ExpectObject(root, "descriptor", RootKeys);
                 ExpectObject(root["drive"], "drive", DriveKeys);
                 ExpectBool(root["drive"]["holonomic"], "drive.holonomic");
@@ -109,6 +116,7 @@ namespace OmniBot.VR.Descriptor
                     return false;
                 }
 
+                descriptor.CapabilityParams = capabilityParams;
                 descriptor.Validate();
                 return true;
             }
@@ -183,6 +191,22 @@ namespace OmniBot.VR.Descriptor
         {
             if (double.IsNaN(value) || double.IsInfinity(value) || value < minimum || value > maximum + 1e-9)
                 throw new InvalidOperationException(name + " is outside [" + minimum + ", " + maximum + "]");
+        }
+
+        /// <summary>
+        /// <c>capability_params</c> is optional. Pull it off before the closed key check
+        /// so a document that predates the field still parses, and a non-object is refused.
+        /// </summary>
+        private static JObject DetachCapabilityParams(JObject root)
+        {
+            JToken token = root["capability_params"];
+            if (token == null) return null;
+            if (token.Type == JTokenType.Null)
+                throw new InvalidOperationException("capability_params must not be null");
+            if (token.Type != JTokenType.Object)
+                throw new InvalidOperationException("capability_params must be an object");
+            root.Remove("capability_params");
+            return (JObject)token;
         }
 
         private static JToken UnwrapRosString(JToken token)
