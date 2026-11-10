@@ -302,7 +302,10 @@ namespace OmniBot.VR.App
             var catalog = RobotProfileFactory.FromGarageRobot(_activeRobot);
             if (catalog == null) return null;
 
-            var conn = ConnectionManager.Instance;
+            // A manager that does not exist yet has no descriptor. Creating one
+            // here only DontDestroyOnLoad an empty object, which edit-mode tests
+            // cannot do. An active session already has the manager.
+            ConnectionManager conn = ConnectionManager.HasInstance ? ConnectionManager.Instance : null;
             if (_descriptor == null && conn != null)
                 _descriptor = conn.LatestDescriptor;
 

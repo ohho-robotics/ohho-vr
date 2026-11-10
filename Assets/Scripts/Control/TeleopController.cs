@@ -586,16 +586,26 @@ namespace OmniBot.VR.Control
             _thumbsUpPulse = false;
             if (_workspaceVisual != null)
             {
-                Destroy(_workspaceVisual.gameObject);
+                DestroyOwned(_workspaceVisual.gameObject);
                 _workspaceVisual = null;
             }
             if (_originOwned && _ownedOrigin != null)
             {
-                Destroy(_ownedOrigin);
+                DestroyOwned(_ownedOrigin);
                 _ownedOrigin = null;
                 handWorkspaceOrigin = null;
                 _originOwned = false;
             }
+        }
+
+        /// <summary>
+        /// Edit-mode tests stop teleop. <see cref="Object.Destroy"/> is play mode only.
+        /// </summary>
+        private void DestroyOwned(UnityEngine.Object obj)
+        {
+            if (obj == null) return;
+            if (Application.isPlaying) Destroy(obj);
+            else DestroyImmediate(obj);
         }
 
         private static void Raise(Action action)
