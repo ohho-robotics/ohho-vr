@@ -67,6 +67,12 @@ namespace OmniBot.VR.Control.Drive
         private bool _controllerStopLatched;
 
         /// <summary>
+        /// True when A+B, the HUD button, or both grips own the stop.
+        /// An operate-bar stop leaves this false so operate Reset can clear it.
+        /// </summary>
+        public bool ControllerStopLatched => _controllerStopLatched;
+
+        /// <summary>
         /// Latched while the link was down, so the next connected tick must
         /// publish emergency_stop true. A clear while disconnected is ignored.
         /// </summary>
@@ -305,10 +311,13 @@ namespace OmniBot.VR.Control.Drive
             // ── Scheme-specific velocity ───────────────────────────────────────
             bool hasInput;
             TwistMsg twist = ComputeVelocity(lx, ly, rx, ry, speedMult, out hasInput);
-            // Slew and per-axis ceilings first, then the class hard cap. Turbo has
-            // already been applied, so neither step can leave a command above it.
+            // Slew and per-axis ceilings first, then the active linear limit.
+            // LimitTwist caps each axis, so a holonomic or thruster diagonal
+            // can still exceed a calibration-lowered MaxLinVel. The magnitude
+            // clamp uses that active limit, which is already at or under the
+            // class hard cap. Turbo was applied inside ComputeVelocity.
             SafetyCaps.LimitTwist(twist, Profile, ref _prevVx, ref _prevVy, ref _prevVz, ref _prevWz, input.DeltaTime);
-            ClampLinearSpeed(twist, hardLin);
+            ClampLinearSpeed(twist, ActiveLinVelLimit);
             ClampAngularSpeed(twist, hardAng);
             if (twist != null && twist.linear != null)
             {
@@ -409,11 +418,14 @@ namespace OmniBot.VR.Control.Drive
         /// the robot. The next connected tick publishes <c>emergency_stop</c> true.
         /// A stop the robot already holds is restored with
         /// <paramref name="publishPending"/> false and does not publish.
+        /// <paramref name="controllerOwned"/> keeps the original source: true for
+        /// A+B, the HUD button, or both grips, and false for an operate-only stop
+        /// so operate Reset can still clear that restore.
         /// </summary>
-        public void RestoreEmergencyStopLatch(bool publishPending = false)
+        public void RestoreEmergencyStopLatch(bool publishPending = false, bool controllerOwned = true)
         {
             EmergencyStopActive = true;
-            _controllerStopLatched = true;
+            _controllerStopLatched = controllerOwned;
             IsPublishing = false;
             _estopPublishPending = publishPending;
             // No link: a restore must not publish. The next connected tick
@@ -467,7 +479,8 @@ namespace OmniBot.VR.Control.Drive
         /// Map dead-zoned thumbstick values + speed multiplier → a Twist message.
         /// Scale linear axes by <see cref="ActiveLinVelLimit"/> and angular axes by
         /// <see cref="ActiveAngVelLimit"/>. Both are already at or under the class
-        /// hard cap; <see cref="Tick"/> clamps again after this returns.
+        /// hard cap; <see cref="Tick"/> clamps linear magnitude to
+        /// <see cref="ActiveLinVelLimit"/> again after this returns.
         /// <paramref name="speedMult"/> is 1.0, or 2.0 when sim turbo is held.
         /// </summary>
         protected abstract TwistMsg ComputeVelocity(

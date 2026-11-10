@@ -881,6 +881,80 @@ namespace OmniBot.VR.Tests
         }
 
         [Test]
+        public void CalibratedSpeedCap_HolonomicDiagonal_UsesActiveLinVelLimit()
+        {
+            _profile.MaxLinVel = 0.05f;
+            _profile.MaxLatVel = 0.05f;
+            _scheme.Configure(_profile);
+
+            var input = new TeleopInput
+            {
+                LeftStick = new Vector2(1f, 1f),
+                LeftGrip = true,
+                DeltaTime = 0.1f
+            };
+            _scheme.Tick(ref input, _link);
+
+            var twist = (TwistMsg)_link.Published.Find(p => p.topic == _profile.Topics.CmdVel).msg;
+            float mag = LinearMagnitude(twist);
+            Assert.AreEqual(0.05f, mag, 0.0001f,
+                "A calibration-lowered MaxLinVel caps the diagonal, not only each axis");
+            Assert.Greater(twist.linear.x, 0f);
+            Assert.Greater(twist.linear.y, 0f);
+            Assert.Less(mag, RobotConfig.MAX_LINEAR_VEL);
+        }
+
+        [Test]
+        public void CalibratedSpeedCap_ThrusterDiagonal_UsesActiveLinVelLimit()
+        {
+            var profile = new RobotProfile
+            {
+                RobotId = "bluerov",
+                Name = "BlueROV",
+                Drive = DriveKind.Thruster,
+                Holonomic = true,
+                MaxLinVel = 0.4f,
+                MaxLatVel = 0.4f,
+                MaxAngVel = 1.0f,
+                HardMaxLinVel = 1.5f,
+                HardMaxAngVel = 1.0f,
+                Topics = new RobotTopics
+                {
+                    CmdVel = "/cmd_vel/teleop",
+                    ControlMode = "/control_mode",
+                    EmergencyStop = "/emergency_stop"
+                }
+            };
+            var scheme = new ThrusterDriveScheme();
+            scheme.Configure(profile);
+            var input = new TeleopInput
+            {
+                LeftStick = new Vector2(1f, 1f),
+                RightStick = new Vector2(0f, 1f),
+                LeftGrip = true,
+                DeltaTime = 0.1f
+            };
+            scheme.Tick(ref input, _link);
+
+            var twist = (TwistMsg)_link.Published.Find(p => p.topic == profile.Topics.CmdVel).msg;
+            float mag = LinearMagnitude(twist);
+            Assert.AreEqual(profile.MaxLinVel, mag, 0.0001f,
+                "A thruster diagonal stays at the calibrated MaxLinVel");
+            Assert.Greater(twist.linear.x, 0f);
+            Assert.Greater(twist.linear.y, 0f);
+            Assert.Greater(twist.linear.z, 0f);
+            Assert.Less(mag, profile.HardMaxLinVel);
+        }
+
+        static float LinearMagnitude(TwistMsg twist)
+        {
+            return Mathf.Sqrt(
+                twist.linear.x * twist.linear.x +
+                twist.linear.y * twist.linear.y +
+                twist.linear.z * twist.linear.z);
+        }
+
+        [Test]
         public void StopAndConfigure_KeepLatch_AndDoNotPublishClear()
         {
             _scheme.TriggerEmergencyStop(_link);
@@ -1109,6 +1183,147 @@ namespace OmniBot.VR.Tests
             Assert.IsTrue(PublishedEStop(true), "Reconnect publishes the stop the drop could not send");
             Assert.IsFalse(PublishedEStop(false));
             AssertNoDriving(_link);
+        }
+
+        [Test]
+        public void TeleopRestart_OperateOnlyStop_StaysClearableByOperateReset()
+        {
+            PreflightGate.Allow();
+            _profile.HasArm = false;
+            _profile.ArmDof = 0;
+
+            var host = new GameObject("operate-only-restore");
+            try
+            {
+                var teleop = host.AddComponent<TeleopController>();
+                teleop.SetLink(_link);
+                teleop.StartTeleop(_profile);
+
+                OperateSafetyLatch.Latch();
+                var drive = new TeleopInput
+                {
+                    LeftGrip = true,
+                    LeftStick = new Vector2(0f, 1f),
+                    DeltaTime = 0.1f
+                };
+                var first = DriveOf(teleop);
+                first.Tick(ref drive, _link);
+                Assert.IsTrue(first.IsEmergencyStopActive);
+                Assert.IsFalse(first.ControllerStopLatched, "An operate-bar stop is not a controller latch");
+
+                teleop.StartTeleop(_profile);
+                var second = DriveOf(teleop);
+                Assert.AreNotSame(first, second);
+                Assert.IsTrue(second.IsEmergencyStopActive, "Restart keeps the operate stop");
+                Assert.IsFalse(second.ControllerStopLatched,
+                    "Restart must not turn an operate-only stop into a controller latch");
+
+                _link.Clear();
+                Assert.IsTrue(teleop.TryResetOperateEStop());
+                Assert.IsFalse(second.IsEmergencyStopActive,
+                    "Operate Reset clears a restored operate-only stop");
+                Assert.IsTrue(PublishedEStop(false));
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(host);
+            }
+        }
+
+        [Test]
+        public void TeleopRestart_ControllerStop_StaysControllerLatch()
+        {
+            PreflightGate.Allow();
+            _profile.HasArm = false;
+            _profile.ArmDof = 0;
+
+            var host = new GameObject("controller-latch-restore");
+            try
+            {
+                var teleop = host.AddComponent<TeleopController>();
+                teleop.SetLink(_link);
+                teleop.StartTeleop(_profile);
+
+                var press = new TeleopInput
+                {
+                    BothGrips = true,
+                    BothGripsPressed = true,
+                    LeftGrip = true,
+                    RightGrip = true,
+                    DeltaTime = 0.1f
+                };
+                var first = DriveOf(teleop);
+                first.Tick(ref press, _link);
+                Assert.IsTrue(first.ControllerStopLatched);
+
+                teleop.StartTeleop(_profile);
+                var second = DriveOf(teleop);
+                Assert.IsTrue(second.IsEmergencyStopActive);
+                Assert.IsTrue(second.ControllerStopLatched,
+                    "Restart keeps a both-grips stop as a controller latch");
+
+                _link.Clear();
+                Assert.IsTrue(teleop.TryResetOperateEStop());
+                Assert.IsTrue(second.IsEmergencyStopActive,
+                    "Operate Reset does not clear a restored controller stop");
+                Assert.IsFalse(PublishedEStop(false),
+                    "Operate Reset must not publish emergency_stop false over a restored controller latch");
+
+                FinishDeadmanClear(second);
+                Assert.IsFalse(second.IsEmergencyStopActive);
+                Assert.AreEqual(1, CountEStop(false));
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(host);
+            }
+        }
+
+        [Test]
+        public void TeleopRestart_FixedBaseOperateStop_StaysClearableByOperateReset()
+        {
+            PreflightGate.Allow();
+            var profile = MakeOmniBotProfile();
+            profile.RobotId = "so101-arm";
+            profile.Name = "SO-101";
+            profile.Drive = DriveKind.FixedBase;
+            profile.BaseDof = 0;
+            profile.Holonomic = false;
+            profile.HasArm = true;
+            profile.ArmDof = 6;
+            profile.Topics.CmdVel = "";
+            profile.Topics.EmergencyStop = "/emergency_stop";
+
+            var host = new GameObject("fixed-base-operate-restore");
+            try
+            {
+                var teleop = host.AddComponent<TeleopController>();
+                teleop.SetLink(_link);
+                teleop.StartTeleop(profile);
+
+                OperateSafetyLatch.Latch();
+                Pump(teleop, new TeleopInput { LeftGrip = true, DeltaTime = 0.1f }, true, false);
+                Assert.IsTrue(teleop.IsGripEStopActive, "The operate bar latches a fixed-base arm");
+
+                teleop.StartTeleop(profile);
+                Assert.IsTrue(teleop.IsGripEStopActive, "Restart keeps the operate stop");
+
+                _link.Clear();
+                Assert.IsTrue(teleop.TryResetOperateEStop());
+                Assert.IsFalse(teleop.IsGripEStopActive,
+                    "Operate Reset clears a restored operate-only arm stop");
+                Assert.IsTrue(_link.Published.Exists(p =>
+                    p.topic == profile.Topics.EmergencyStop && p.msg is BoolMsg flag && !flag.data));
+            }
+            finally
+            {
+                if (host != null)
+                {
+                    var teleop = host.GetComponent<TeleopController>();
+                    if (teleop != null) teleop.StopTeleop();
+                }
+                UnityEngine.Object.DestroyImmediate(host);
+            }
         }
 
         [Test]

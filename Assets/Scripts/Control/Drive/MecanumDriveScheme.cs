@@ -6,8 +6,9 @@ namespace OmniBot.VR.Control.Drive
     /// <summary>
     /// Holonomic mecanum base drive — the OmniBot reference. Left thumbstick →
     /// vx/vy strafe, right thumbstick X → yaw. Linear speed uses
-    /// <see cref="DriveSchemeBase.ActiveLinVelLimit"/>, then clamped again to the
-    /// robot-class hard cap (OmniBot 0.2 m/s).
+    /// <see cref="DriveSchemeBase.ActiveLinVelLimit"/>, and the vector magnitude
+    /// is clamped to that same active limit so a diagonal stays at or under
+    /// the calibrated <c>MaxLinVel</c>.
     /// E-stop, turbo, publish timing and
     /// control-mode management are inherited from <see cref="DriveSchemeBase"/>.
     /// </summary>

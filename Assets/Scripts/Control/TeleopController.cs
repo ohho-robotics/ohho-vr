@@ -94,6 +94,13 @@ namespace OmniBot.VR.Control
         /// </summary>
         private bool _emergencyStopPublishPending;
 
+        /// <summary>
+        /// The saved stop came from A+B, the HUD button, or both grips.
+        /// An operate-bar stop leaves this false so a rebuild does not turn it
+        /// into a controller latch that operate Reset cannot clear.
+        /// </summary>
+        private bool _emergencyStopControllerOwned;
+
         /// <summary>When set, replaces the ConnectionManager endpoint (edit-mode tests).</summary>
         private string _endpointKeyOverride;
 
@@ -476,15 +483,16 @@ namespace OmniBot.VR.Control
                 if (SameEndpoint(_emergencyStopEndpoint, CurrentEndpointKey()))
                 {
                     if (_drive is DriveSchemeBase drive)
-                        drive.RestoreEmergencyStopLatch(_emergencyStopPublishPending);
+                        drive.RestoreEmergencyStopLatch(_emergencyStopPublishPending, _emergencyStopControllerOwned);
                     else
-                        RestoreArmEmergencyStop(_emergencyStopPublishPending);
+                        RestoreArmEmergencyStop(_emergencyStopPublishPending, _emergencyStopControllerOwned);
                 }
                 else
                 {
                     _emergencyStopLatched = false;
                     _emergencyStopEndpoint = null;
                     _emergencyStopPublishPending = false;
+                    _emergencyStopControllerOwned = false;
                     NavGoalSession.Active.SetHeadsetBlock(false, null);
                 }
             }
@@ -530,12 +538,14 @@ namespace OmniBot.VR.Control
                     _emergencyStopLatched = true;
                     // Read before Stop. A drop may have latched without a publish.
                     _emergencyStopPublishPending = drive.EmergencyStopPublishPending;
+                    _emergencyStopControllerOwned = drive.ControllerStopLatched;
                 }
                 else
                 {
                     _emergencyStopLatched = false;
                     _emergencyStopEndpoint = null;
                     _emergencyStopPublishPending = false;
+                    _emergencyStopControllerOwned = false;
                 }
             }
             else if (_teleopActive)
@@ -549,12 +559,14 @@ namespace OmniBot.VR.Control
                         _emergencyStopEndpoint = CurrentEndpointKey();
                     _emergencyStopLatched = true;
                     _emergencyStopPublishPending = _armEStopPublishPending;
+                    _emergencyStopControllerOwned = _armEStopController;
                 }
                 else
                 {
                     _emergencyStopLatched = false;
                     _emergencyStopEndpoint = null;
                     _emergencyStopPublishPending = false;
+                    _emergencyStopControllerOwned = false;
                 }
             }
             if (!_teleopActive && _drive == null && _manip == null) return;
@@ -648,7 +660,13 @@ namespace OmniBot.VR.Control
         private void NotifyEmergencyStopEdges(TeleopInput input)
         {
             if (input.BothGripsPressed || input.EmergencyStopPressed || input.HudEmergencyStop)
-                RaisePolicyEStop(true);
+            {
+                // The HUD button may already have reported this latch. This
+                // control frame still has to yield a policy that is running
+                // on the sample. False waits until the latch itself clears.
+                _policyEstopReported = true;
+                Raise(EmergencyStopChanged, true);
+            }
         }
 
         /// <summary>
@@ -816,6 +834,7 @@ namespace OmniBot.VR.Control
             _emergencyStopLatched = false;
             _emergencyStopEndpoint = null;
             _emergencyStopPublishPending = false;
+            _emergencyStopControllerOwned = false;
         }
 
         private void RememberLatchEndpoint()
@@ -895,10 +914,10 @@ namespace OmniBot.VR.Control
             PublishArmEStop(link, false);
         }
 
-        private void RestoreArmEmergencyStop(bool publishPending)
+        private void RestoreArmEmergencyStop(bool publishPending, bool controllerOwned = true)
         {
             _armEStopLatched = true;
-            _armEStopController = true;
+            _armEStopController = controllerOwned;
             _armEStopResetAccepted = false;
             _armEStopDeadmanReleased = false;
             _armEStopPublishPending = publishPending;
