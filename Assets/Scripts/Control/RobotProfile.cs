@@ -158,6 +158,12 @@ namespace OmniBot.VR.Control
         public bool IsStationary;
         public bool IsLegged;
 
+        /// <summary>
+        /// Set from a latched descriptor. Drive and manipulation schemes read these
+        /// names. Null on the catalog-only path, which still uses <see cref="Drive"/>.
+        /// </summary>
+        public DescriptorCapabilitySet Capabilities;
+
         // ── ROS topics the teleop layer publishes / subscribes ────────────────
         public RobotTopics Topics;
 
@@ -197,6 +203,18 @@ namespace OmniBot.VR.Control
 
         /// <summary>True if this is a dual-arm humanoid (two arms driven by two hands).</summary>
         public bool IsDualArm;
+
+        /// <summary>
+        /// Spans of <see cref="Joints"/> for a resolved dual-arm descriptor.
+        /// Counts stay 0 on the catalog path, where <see cref="Joints"/> is one
+        /// arm and the dual-arm scheme mirrors it with <c>r_</c>/<c>l_</c> names,
+        /// and when a descriptor cannot map both arms without guessing. A resolved
+        /// descriptor publishes the joints in each span under their own names.
+        /// </summary>
+        public int LeftArmJointOffset;
+        public int LeftArmJointCount;
+        public int RightArmJointOffset;
+        public int RightArmJointCount;
 
         // ── IK location (Phase 4) ──────────────────────────────────────────────
         /// <summary>

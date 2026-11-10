@@ -13,7 +13,7 @@ namespace OmniBot.VR.Control
     /// Drive dispatch (mirrors <c>DRIVE_SPECS</c> on the website):
     /// <list type="bullet">
     /// <item><c>mecanum</c> → <see cref="MecanumDriveScheme"/> (holonomic strafe)</item>
-    /// <item><c>differential</c> / <c>skid-steer</c> / <c>tracked</c> / <c>rocker-bogie</c> / <c>unknown</c> → <see cref="DifferentialDriveScheme"/></item>
+    /// <item><c>differential</c> / <c>skid-steer</c> / <c>tracked</c> / <c>rocker-bogie</c> → <see cref="DifferentialDriveScheme"/>. The catalog path also uses that scheme for <c>unknown</c>. A descriptor with no known drive capability does not.</item>
     /// <item><c>ackermann</c> → <see cref="AckermannDriveScheme"/></item>
     /// <item><c>quadrotor</c> / <c>hexacopter</c> / <c>vtol</c> → <see cref="AerialDriveScheme"/></item>
     /// <item><c>quadruped</c> / <c>hexapod</c> / <c>bipedal</c> → <see cref="MecanumDriveScheme"/> (same vx/vy/ω; gait gestures are Phase 5)</item>
@@ -24,7 +24,7 @@ namespace OmniBot.VR.Control
     /// Manipulation dispatch:
     /// <list type="bullet">
     /// <item>6-DOF arm (SO-101, UR5e) → <see cref="HandIK6DofScheme"/></item>
-    /// <item>Dual-arm humanoids (armDof ≥ 7, two hands) → <see cref="DualArmManipulationScheme"/></item>
+    /// <item>Descriptor <c>manipulation.dual_arm</c> with two resolved arms, or catalog armDof ≥ 7 → <see cref="DualArmManipulationScheme"/>. An unresolved descriptor mapping selects nothing.</item>
     /// <item>1-DOF gripper-only → <see cref="GripperOnlyScheme"/></item>
     /// <item>No arm → null (manipulation layer absent)</item>
     /// </list>
@@ -39,8 +39,15 @@ namespace OmniBot.VR.Control
         public static IDriveScheme CreateDriveScheme(RobotProfile profile)
         {
             if (profile == null) return null;
+            DriveKind kind = profile.Drive;
+            if (profile.Capabilities != null && profile.Capabilities.FromDescriptor)
+            {
+                if (!CapabilitySchemes.TrySelectDrive(profile.Capabilities, profile.Drive, out kind))
+                    return null;
+            }
+
             IDriveScheme scheme;
-            switch (profile.Drive)
+            switch (kind)
             {
                 case DriveKind.Mecanum:
                     scheme = new MecanumDriveScheme();
@@ -98,6 +105,23 @@ namespace OmniBot.VR.Control
         public static IManipulationScheme CreateManipulationScheme(RobotProfile profile, Transform workspaceOrigin)
         {
             if (profile == null || !profile.HasArm || profile.ArmDof <= 0) return null;
+
+            bool fromDescriptor = profile.Capabilities != null && profile.Capabilities.FromDescriptor;
+            if (fromDescriptor && !CapabilitySchemes.AllowsManipulation(profile.Capabilities))
+                return null;
+
+            // manipulation.dual_arm. Joints is every arm concatenated. Drive each
+            // resolved span under its own names. A missing or ambiguous split
+            // publishes nothing: do not mirror that list or drive it as one arm.
+            if (fromDescriptor && profile.Capabilities.DualArm)
+            {
+                if (!DualArmManipulationScheme.HasDistinctArms(profile))
+                    return null;
+
+                var dual = new DualArmManipulationScheme();
+                dual.Configure(profile, workspaceOrigin);
+                return dual;
+            }
 
             // 1-DOF: gripper-only (e.g. a simple pick-and-place AMR)
             if (profile.ArmDof == 1)
