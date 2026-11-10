@@ -11,6 +11,7 @@ using OmniBot.VR.Control.Drive;
 using OmniBot.VR.Control.Manip;
 using OmniBot.VR.Control.Safety;
 using OmniBot.VR.Latency;
+using OmniBot.VR.Nav;
 
 namespace OmniBot.VR.Control
 {
@@ -401,6 +402,10 @@ namespace OmniBot.VR.Control
             if (profile.HasArm)
                 EnsureWorkspaceOrigin(profile);
             _drive = ControlSchemeFactory.CreateDriveScheme(profile);
+            // Drive schemes bind nav state in Configure. A robot with no drive
+            // scheme still must not keep the previous robot's map and goal.
+            if (_drive == null)
+                NavGoalSession.Active.BeginRobot(profile);
             if (_emergencyStopLatched && _drive is DriveSchemeBase drive)
             {
                 if (SameEndpoint(_emergencyStopEndpoint, CurrentEndpointKey()))

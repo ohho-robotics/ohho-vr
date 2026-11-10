@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Newtonsoft.Json.Linq;
 using OmniBot.VR.Core;
 using OmniBot.VR.Core.Platform;
+using OmniBot.VR.Nav;
 using OmniBot.VR.Mapping;
 using DescriptorCeilings = OmniBot.VR.Descriptor.DescriptorCeilings;
 using LatchedRobotDescriptor = OmniBot.VR.Descriptor.RobotDescriptor;
@@ -55,7 +56,9 @@ namespace OmniBot.VR.Control
 
             var profile = Derive(hw, robot.RobotType, category);
             ApplyFlagshipOverride(profile, modelId, category);
+            profile.DeploymentKind = RobotDeployment.FromUserRobot(robot.UserRobot);
             profile.Deployment = ArmDeploymentRules.FromGarageStatus(robot.UserRobot != null ? robot.UserRobot.Status : null);
+            profile.UserRobotId = robot.UserRobot != null ? robot.UserRobot.Id : null;
             profile.MaxJointDeltaRad = RobotDescriptor.MaxJointDeltaRad;
             bool so101Family = modelId == "so101-arm" || modelId == "omnibot" || modelId == "omnibot-pro";
             profile.JointZerosCalibrated = so101Family && So101JointZeroConfig.Load().Calibrated;
@@ -241,7 +244,11 @@ namespace OmniBot.VR.Control
                 ArmMaxReach = armReach,
                 ArmLinkLengths = linkLengths,
                 MaxJointDeltaRad = jointDelta,
+                DeploymentKind = sameRobot && !string.IsNullOrEmpty(catalogFallback.DeploymentKind)
+                    ? catalogFallback.DeploymentKind
+                    : RobotDeployment.Real,
                 Deployment = sameRobot ? catalogFallback.Deployment : ArmDeployment.Real,
+                UserRobotId = sameRobot ? catalogFallback.UserRobotId : null,
                 CapsFromDescriptor = true,
                 PolicyModelsFallback = sameRobot && !string.IsNullOrEmpty(catalogFallback.PolicyModelsFallback)
                     ? catalogFallback.PolicyModelsFallback

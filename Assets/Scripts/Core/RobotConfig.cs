@@ -11,6 +11,12 @@ namespace OmniBot.VR.Core
         // OmniBot's catalog arm command is /arm/joint_commands/teleop (main's
         // mux input). RobotConfig no longer declares TOPIC_* constants.
 
+        // Nav2 action and service names. These are not teleop topic constants.
+        public const string ACTION_NAVIGATE_TO_POSE = "navigate_to_pose";
+        public const string ACTION_NAVIGATE_TO_POSE_TYPE = "nav2_msgs/action/NavigateToPose";
+        public const string SERVICE_LIST_WAYPOINTS = "/ohho/nav/list_waypoints";
+        public const string SERVICE_GET_PARAM = "/rosapi/get_param";
+
         // ── Physical limits ──────────────────────────────────────────────────
         /// <summary>Maximum base linear velocity in m/s.</summary>
         public const float MAX_LINEAR_VEL  = 0.2f;
