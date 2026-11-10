@@ -60,6 +60,13 @@ namespace OmniBot.VR.Control.Drive
         private bool _deadmanReleasedAfterReset;
 
         /// <summary>
+        /// Set when A+B, the HUD button, or both grips latched this stop.
+        /// Operate reset clears only the operate-screen hold. This latch stays
+        /// until Reset, a deadman release, and a re-press.
+        /// </summary>
+        private bool _controllerStopLatched;
+
+        /// <summary>
         /// Latched while the link was down, so the next connected tick must
         /// publish emergency_stop true. A clear while disconnected is ignored.
         /// </summary>
@@ -177,13 +184,16 @@ namespace OmniBot.VR.Control.Drive
         }
 
         /// <summary>
-        /// Clear a UI-latched stop after <see cref="OperateSafetyLatch"/> is cleared.
-        /// Refuses while the latch is still set or both grips are held, so reset
-        /// cannot release a stop the operator is still asserting.
+        /// Clear an operate-screen stop after <see cref="OperateSafetyLatch"/> is cleared.
+        /// Refuses while that latch is still set, while a grip is held, and while
+        /// A+B, the HUD button, or both grips own the stop. Those stay latched
+        /// until Reset, a deadman release, and a re-press. This method does not
+        /// publish <c>emergency_stop</c> false for that controller stop, including
+        /// a stop that was taken while the link was down.
         /// </summary>
         public void ReleaseUiStop(IRobotLink link, bool gripHeld)
         {
-            if (OperateSafetyLatch.UiEStopLatched || gripHeld) return;
+            if (OperateSafetyLatch.UiEStopLatched || gripHeld || _controllerStopLatched) return;
             EmergencyStopActive = false;
             _estopPublishPending = false;
             _resetAccepted = false;
@@ -403,6 +413,7 @@ namespace OmniBot.VR.Control.Drive
         public void RestoreEmergencyStopLatch(bool publishPending = false)
         {
             EmergencyStopActive = true;
+            _controllerStopLatched = true;
             IsPublishing = false;
             _estopPublishPending = publishPending;
             // No link: a restore must not publish. The next connected tick
@@ -443,6 +454,7 @@ namespace OmniBot.VR.Control.Drive
         public void DiscardEmergencyStopLatch()
         {
             EmergencyStopActive = false;
+            _controllerStopLatched = false;
             _estopPublishPending = false;
             IsPublishing = false;
             NavGoalSession.Active.SetHeadsetBlock(false, null);
@@ -492,6 +504,7 @@ namespace OmniBot.VR.Control.Drive
         public void ClearEmergencyStop(IRobotLink link)
         {
             EmergencyStopActive = false;
+            _controllerStopLatched = false;
             _estopPublishPending = false;
             _resetAccepted = false;
             _deadmanReleasedAfterReset = false;
@@ -520,6 +533,7 @@ namespace OmniBot.VR.Control.Drive
                 || (abHeld && !EmergencyStopActive);
             if (latch)
             {
+                _controllerStopLatched = true;
                 _resetAccepted = false;
                 _deadmanReleasedAfterReset = false;
                 if (!EmergencyStopActive)
@@ -572,13 +586,15 @@ namespace OmniBot.VR.Control.Drive
 
         /// <summary>
         /// Latch A+B, the HUD button, or both grips while nothing can be published.
-        /// Does not run the clear sequence.
+        /// Does not run the clear sequence. The stop stays a controller latch, so
+        /// operate reset cannot publish <c>emergency_stop</c> false for it.
         /// </summary>
-        private void LatchEmergencyStopWhileLinkDown(ref TeleopInput input, IRobotLink link)
+        protected void LatchEmergencyStopWhileLinkDown(ref TeleopInput input, IRobotLink link)
         {
             bool chord = input.EmergencyStopPressed || input.HudEmergencyStop || input.BothGripsPressed
                 || input.BothGrips || (input.ButtonA && input.ButtonB);
             if (!chord) return;
+            _controllerStopLatched = true;
             if (!EmergencyStopActive)
                 TriggerEmergencyStop(link);
             else

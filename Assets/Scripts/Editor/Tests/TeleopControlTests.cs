@@ -1400,6 +1400,274 @@ namespace OmniBot.VR.Tests
             }
         }
 
+        [Test]
+        public void OperateReset_LeavesControllerEStop_UntilDeadmanSequence_AndPolicyFollowsThatLatch()
+        {
+            PreflightGate.Allow();
+            _profile.HasArm = false;
+            _profile.ArmDof = 0;
+            var policyProfile = MakeOmniBotProfile();
+            policyProfile.Topics.ArmCmdMode = "/arm/cmd_mode";
+            policyProfile.Topics.ArmCommands = "/arm/joint_commands/teleop";
+            policyProfile.Topics.PolicyEnable = "/policy/enable";
+            policyProfile.Topics.PolicyLoad = "/policy/load";
+            policyProfile.PolicyModelsFallback = "act,smolvla";
+
+            var policy = new PolicyController();
+            policy.Bind(policyProfile, _link, PolicySessionKind.Sim);
+            Assert.IsTrue(policy.Select("act"));
+            Assert.IsTrue(policy.Load().Accepted, policy.LastRefusal);
+            policy.Confirm();
+            Assert.IsTrue(policy.Start().Accepted, policy.LastRefusal);
+
+            var host = new GameObject("operate-reset-estop");
+            try
+            {
+                var teleop = host.AddComponent<TeleopController>();
+                teleop.SetLink(_link);
+                teleop.EmergencyStopChanged += policy.NotifyEmergencyStop;
+                teleop.StartTeleop(_profile);
+                var drive = DriveOf(teleop);
+
+                Pump(teleop, new TeleopInput
+                {
+                    BothGrips = true,
+                    BothGripsPressed = true,
+                    LeftGrip = true,
+                    RightGrip = true,
+                    DeltaTime = 0.1f,
+                }, linkUp: true, aerialUp: false);
+                Assert.IsTrue(drive.IsEmergencyStopActive);
+                Assert.AreEqual(PolicyRunState.Stopped, policy.RunState);
+                Assert.IsTrue(policy.EmergencyStopActive);
+
+                _link.Clear();
+                Pump(teleop, new TeleopInput
+                {
+                    BothGripsReleased = true,
+                    LeftGrip = true,
+                    DeltaTime = 0.1f,
+                }, linkUp: true, aerialUp: false);
+                Assert.IsTrue(drive.IsEmergencyStopActive, "Releasing a grip leaves the latch set");
+                Assert.IsTrue(policy.EmergencyStopActive,
+                    "A grip release must not clear the policy latch while the drive is still stopped");
+                Assert.IsTrue(teleop.TryResetOperateEStop());
+                Assert.IsTrue(drive.IsEmergencyStopActive,
+                    "Operate Reset does not clear a both-grips stop, including while the deadman is held");
+                Assert.IsFalse(PublishedEStop(false));
+                Assert.IsTrue(policy.EmergencyStopActive);
+
+                int vlaBefore = CountMode("vla");
+                int policyModeBefore = CountMode("policy");
+                policy.Confirm();
+                Assert.AreEqual(PolicyRefuse.Estop, policy.Start().Reason);
+                Assert.AreEqual(vlaBefore, CountMode("vla"), "A refused start must not publish control_mode=vla");
+                Assert.AreEqual(policyModeBefore, CountMode("policy"),
+                    "A refused start must not publish ArmCmdMode=policy");
+
+                Pump(teleop, new TeleopInput { ResetEmergencyStop = true, LeftGrip = true, DeltaTime = 0.1f }, true, false);
+                Pump(teleop, new TeleopInput { LeftGrip = false, DeltaTime = 0.1f }, true, false);
+                Assert.IsTrue(policy.EmergencyStopActive, "The policy latch stays until the deadman is pressed again");
+                Pump(teleop, new TeleopInput
+                {
+                    LeftGrip = true,
+                    LeftStick = new Vector2(0f, 1f),
+                    DeltaTime = 0.1f,
+                }, true, false);
+                Assert.IsFalse(drive.IsEmergencyStopActive);
+                Assert.IsFalse(policy.EmergencyStopActive,
+                    "The policy latch clears when the drive latch clears");
+                policy.Confirm();
+                Assert.IsTrue(policy.Start().Accepted, policy.LastRefusal);
+                Assert.Greater(CountMode("vla"), vlaBefore);
+                Assert.Greater(CountMode("policy"), policyModeBefore);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(host);
+            }
+        }
+
+        [Test]
+        public void AerialAAndB_LatchesWhileBothLinksAreDown()
+        {
+            PreflightGate.Allow();
+            var profile = MakeOmniBotProfile();
+            profile.RobotId = "px4-x500";
+            profile.Name = "px4-x500";
+            profile.Drive = DriveKind.Quadrotor;
+            profile.HasArm = false;
+            profile.ArmDof = 0;
+            profile.Holonomic = true;
+
+            var host = new GameObject("aerial-drop-estop");
+            try
+            {
+                var teleop = host.AddComponent<TeleopController>();
+                _link.IsConnected = false;
+                teleop.SetLink(_link);
+                teleop.StartTeleop(profile);
+                var aerial = DriveOf(teleop) as AerialDriveScheme;
+                Assert.IsNotNull(aerial);
+
+                Pump(teleop, new TeleopInput
+                {
+                    ButtonA = true,
+                    ButtonB = true,
+                    EmergencyStopPressed = true,
+                    DeltaTime = 0.1f,
+                }, linkUp: false, aerialUp: false);
+                Assert.IsTrue(aerial.IsEmergencyStopActive, "A+B while both links are down still latches");
+                Assert.IsTrue(aerial.EmergencyStopPublishPending);
+                Assert.AreEqual(0, _link.Published.Count);
+
+                Pump(teleop, new TeleopInput { DeltaTime = 0.1f }, linkUp: false, aerialUp: false);
+                Assert.IsTrue(aerial.IsEmergencyStopActive, "Releasing A+B during the drop keeps the latch");
+
+                Pump(teleop, new TeleopInput { ResetEmergencyStop = true, LeftGrip = false, DeltaTime = 0.1f }, false, false);
+                Pump(teleop, new TeleopInput { LeftGrip = true, DeltaTime = 0.1f }, false, false);
+                Assert.IsTrue(aerial.IsEmergencyStopActive, "The clear sequence does not run while both links are down");
+                Assert.AreEqual(0, _link.Published.Count);
+
+                _link.IsConnected = true;
+                _link.Clear();
+                Pump(teleop, new TeleopInput { DeltaTime = 0.1f }, linkUp: true, aerialUp: false);
+                Assert.IsTrue(aerial.IsEmergencyStopActive);
+                Assert.IsFalse(aerial.EmergencyStopPublishPending);
+                Assert.IsTrue(PublishedEStop(true), "The link publishes the stop that was latched during the drop");
+                Assert.IsFalse(PublishedEStop(false));
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(host);
+            }
+        }
+
+        [Test]
+        public void FixedBaseHudAndAAndB_PublishAndLatchUntilDeadmanSequence()
+        {
+            PreflightGate.Allow();
+            var profile = MakeOmniBotProfile();
+            profile.RobotId = "so101-arm";
+            profile.Name = "SO-101";
+            profile.Drive = DriveKind.FixedBase;
+            profile.BaseDof = 0;
+            profile.Holonomic = false;
+            profile.HasArm = true;
+            profile.ArmDof = 6;
+            profile.Deployment = ArmDeployment.Sim;
+            profile.MaxLinVel = 0f;
+            profile.MaxAngVel = 0f;
+            profile.Topics.CmdVel = "";
+            profile.Topics.EmergencyStop = "/emergency_stop";
+            profile.Topics.ArmEnable = "/arm/enable";
+            profile.Topics.ArmCommands = "/arm/joint_commands";
+            profile.Topics.ArmCmdMode = "/arm/cmd_mode";
+            profile.Topics.ControlMode = "/control_mode";
+            profile.Topics.PolicyEnable = "/policy/enable";
+            profile.Topics.PolicyLoad = "/policy/load";
+            profile.PolicyModelsFallback = "act,smolvla";
+
+            var policy = new PolicyController();
+            policy.Bind(profile, _link, PolicySessionKind.Sim);
+            Assert.IsTrue(policy.Select("act"));
+            Assert.IsTrue(policy.Load().Accepted, policy.LastRefusal);
+            policy.Confirm();
+            Assert.IsTrue(policy.Start().Accepted, policy.LastRefusal);
+
+            var host = new GameObject("fixed-base-estop");
+            try
+            {
+                var teleop = host.AddComponent<TeleopController>();
+                teleop.SetLink(_link);
+                teleop.EmergencyStopChanged += policy.NotifyEmergencyStop;
+                teleop.StartTeleop(profile);
+                Assert.IsNull(typeof(TeleopController).GetField("_drive", BindingFlags.Instance | BindingFlags.NonPublic)
+                    .GetValue(teleop));
+                var arm = typeof(TeleopController).GetField("_manip", BindingFlags.Instance | BindingFlags.NonPublic)
+                    .GetValue(teleop) as HandIK6DofScheme;
+                Assert.IsNotNull(arm);
+                arm.SetArmEnabled(true, _link);
+                Assert.IsTrue(arm.ArmEnabled);
+
+                _link.Clear();
+                teleop.RequestHudEmergencyStop();
+                Pump(teleop, new TeleopInput { DeltaTime = 0.1f }, linkUp: true, aerialUp: false);
+                Assert.IsTrue(teleop.IsGripEStopActive, "HUD e-stop latches a fixed-base arm");
+                Assert.IsTrue(PublishedEStop(true), "HUD e-stop publishes emergency_stop");
+                Assert.IsFalse(arm.ArmEnabled, "HUD e-stop disarms the arm");
+                Assert.AreEqual(PolicyRunState.Stopped, policy.RunState);
+
+                Pump(teleop, new TeleopInput { BothGripsReleased = true, DeltaTime = 0.1f }, true, false);
+                Assert.IsTrue(teleop.IsGripEStopActive, "The latch remains after the HUD press is consumed");
+                Assert.IsTrue(policy.EmergencyStopActive);
+                Assert.IsTrue(teleop.TryResetOperateEStop());
+                Assert.IsTrue(teleop.IsGripEStopActive, "Operate Reset does not clear the HUD latch");
+                Assert.IsFalse(PublishedEStop(false));
+
+                policy.Confirm();
+                Assert.AreEqual(PolicyRefuse.Estop, policy.Start().Reason);
+
+                Pump(teleop, new TeleopInput { ResetEmergencyStop = true, LeftGrip = true, DeltaTime = 0.1f }, true, false);
+                Pump(teleop, new TeleopInput { LeftGrip = false, DeltaTime = 0.1f }, true, false);
+                Pump(teleop, new TeleopInput { LeftGrip = true, DeltaTime = 0.1f }, true, false);
+                Assert.IsFalse(teleop.IsGripEStopActive);
+                Assert.IsTrue(PublishedEStop(false));
+                Assert.IsFalse(policy.EmergencyStopActive, "The policy latch clears with the arm latch");
+                arm.SetArmEnabled(true, _link);
+                Pump(teleop, new TeleopInput { LeftGrip = true, DeltaTime = 0.1f }, true, false);
+                Assert.IsTrue(arm.ArmEnabled, "The arm can be enabled again after the deadman sequence");
+
+                _link.IsConnected = false;
+                _link.Clear();
+                Pump(teleop, new TeleopInput
+                {
+                    ButtonA = true,
+                    ButtonB = true,
+                    EmergencyStopPressed = true,
+                    DeltaTime = 0.1f,
+                }, linkUp: false, aerialUp: false);
+                Assert.IsTrue(teleop.IsGripEStopActive, "A+B while the link is down latches a fixed-base arm");
+                Assert.AreEqual(0, CountEStop(true));
+                Pump(teleop, new TeleopInput { DeltaTime = 0.1f }, false, false);
+                Assert.IsTrue(teleop.IsGripEStopActive, "Releasing A+B during the drop keeps the latch");
+                Pump(teleop, new TeleopInput { ResetEmergencyStop = true, DeltaTime = 0.1f }, false, false);
+                Pump(teleop, new TeleopInput { LeftGrip = true, DeltaTime = 0.1f }, false, false);
+                Assert.IsTrue(teleop.IsGripEStopActive, "The clear sequence waits until the link is up");
+
+                _link.IsConnected = true;
+                Pump(teleop, new TeleopInput { DeltaTime = 0.1f }, true, false);
+                Assert.IsTrue(PublishedEStop(true), "Reconnect publishes the A+B stop");
+                Assert.IsTrue(policy.EmergencyStopActive);
+            }
+            finally
+            {
+                if (host != null)
+                {
+                    var teleop = host.GetComponent<TeleopController>();
+                    if (teleop != null) teleop.StopTeleop();
+                }
+                UnityEngine.Object.DestroyImmediate(host);
+            }
+        }
+
+        static void Pump(TeleopController teleop, TeleopInput input, bool linkUp, bool aerialUp)
+        {
+            typeof(TeleopController).GetMethod("PumpFrame", BindingFlags.Instance | BindingFlags.NonPublic)
+                .Invoke(teleop, new object[] { input, linkUp, aerialUp });
+        }
+
+        int CountMode(string mode)
+        {
+            int n = 0;
+            foreach (var (topic, msg) in _link.Published)
+            {
+                if (msg is StringMsg text && text.data == mode)
+                    n++;
+            }
+            return n;
+        }
+
         DriveSchemeBase DriveOf(TeleopController teleop)
         {
             var drive = typeof(TeleopController).GetField("_drive", BindingFlags.Instance | BindingFlags.NonPublic)

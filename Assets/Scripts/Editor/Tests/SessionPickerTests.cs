@@ -1,10 +1,17 @@
 using System.Collections.Generic;
+using System.Reflection;
 using NUnit.Framework;
 using UnityEngine;
+using OmniBot.VR.App;
 using OmniBot.VR.Control;
+using OmniBot.VR.Control.Drive;
+using OmniBot.VR.Control.Preflight;
 using OmniBot.VR.Control.Safety;
 using OmniBot.VR.Control.Session;
 using OmniBot.VR.Core;
+using OmniBot.VR.Core.Platform;
+using OmniBot.VR.Nav;
+using OmniBot.VR.Policy;
 
 namespace OmniBot.VR.Tests
 {
@@ -259,6 +266,128 @@ namespace OmniBot.VR.Tests
                 EndpointAddresses.InHeadset("omnibot"), safetyAcknowledged: false, tutorialSeen: true);
             Assert.IsTrue(sim.ReadyToDrive);
             Assert.AreEqual(SessionKind.Sim, sim.Endpoint.Kind);
+        }
+
+        [Test]
+        public void ApplyActiveSession_KeepsSimKind_TurboAndDeadmanOptOut()
+        {
+            var rebuilt = new RobotProfile
+            {
+                RobotId = "omnibot",
+                Name = "OmniBot",
+                Drive = DriveKind.Mecanum,
+                Holonomic = true,
+                MaxLinVel = 0.2f,
+                MaxLatVel = 0.2f,
+                MaxAngVel = 1f,
+                Topics = new RobotTopics
+                {
+                    CmdVel = "/cmd_vel/teleop",
+                    ControlMode = "/control_mode",
+                    EmergencyStop = "/emergency_stop",
+                },
+            };
+            Assert.AreEqual(SessionKind.Real, rebuilt.Kind, "A descriptor profile defaults to real");
+            rebuilt.DisableDeadmanForSimulation();
+            Assert.IsTrue(rebuilt.RequireDeadman, "A real default ignores the sim deadman opt-out");
+
+            ActiveSession.Set(new RobotEndpoint { RobotId = "omnibot", Kind = SessionKind.Sim });
+            try
+            {
+                RealRobotSafety.ApplyActiveSession(rebuilt);
+                Assert.AreEqual(SessionKind.Sim, rebuilt.Kind);
+                Assert.IsTrue(rebuilt.RequireDeadman, "Applying the session keeps the deadman on");
+                rebuilt.DisableDeadmanForSimulation();
+                Assert.IsFalse(rebuilt.RequireDeadman, "A sim session can still opt out of the deadman");
+                rebuilt.RequireDeadman = true;
+
+                var link = new FakeRobotLink();
+                var scheme = new MecanumDriveScheme();
+                scheme.Configure(rebuilt);
+                var half = new TeleopInput
+                {
+                    LeftGrip = true,
+                    LeftStick = new Vector2(0f, 0.5f),
+                    DeltaTime = 0.1f,
+                };
+                scheme.Tick(ref half, link);
+                float baseline = ((TwistMsg)link.Published.Find(p => p.Topic == "/cmd_vel/teleop").Msg).linear.x;
+                link.Published.Clear();
+                var turbo = half;
+                turbo.RightTrigger = true;
+                scheme.Tick(ref turbo, link);
+                float boosted = ((TwistMsg)link.Published.Find(p => p.Topic == "/cmd_vel/teleop").Msg).linear.x;
+                Assert.Greater(boosted, baseline, "A rebuilt sim profile still accepts turbo");
+                Assert.LessOrEqual(boosted, 0.2f);
+
+                rebuilt.Kind = SessionKind.Real;
+                scheme.Configure(rebuilt);
+                link.Published.Clear();
+                scheme.Tick(ref turbo, link);
+                float real = ((TwistMsg)link.Published.Find(p => p.Topic == "/cmd_vel/teleop").Msg).linear.x;
+                Assert.AreEqual(baseline, real, 0.0001f, "The real default ignores turbo");
+            }
+            finally
+            {
+                ActiveSession.Clear();
+            }
+        }
+
+        [Test]
+        public void DescriptorRebuild_CopiesActiveSessionKindOntoTheProfile()
+        {
+            ActiveSession.Set(new RobotEndpoint { RobotId = "omnibot-pro", Kind = SessionKind.Sim });
+            PreflightGate.Allow();
+            var appGo = new GameObject("descriptor-rebuild-app");
+            var teleopGo = new GameObject("descriptor-rebuild-teleop");
+            PolicyPanelController[] panelsBefore = UnityEngine.Object.FindObjectsOfType<PolicyPanelController>();
+            try
+            {
+                var teleop = teleopGo.AddComponent<TeleopController>();
+                teleop.SetLink(new FakeRobotLink());
+                var app = appGo.AddComponent<OhhoVrApp>();
+                var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+                typeof(OhhoVrApp).GetField("teleopController", flags).SetValue(app, teleop);
+                typeof(OhhoVrApp).GetField("_activeRobot", flags).SetValue(app, new GarageRobot
+                {
+                    RobotType = new VrRobotType { Id = "mobile" },
+                    Category = new VrCategory { Id = "mobile-manipulator" },
+                    HardwareModel = new VrHardwareModel
+                    {
+                        Id = "omnibot-pro",
+                        Name = "OmniBot Pro",
+                        Locomotion = "mecanum",
+                        HasArm = false,
+                    },
+                });
+
+                var apply = typeof(OhhoVrApp).GetMethod("ApplyActiveProfile", flags);
+                Assert.IsTrue((bool)apply.Invoke(app, new object[] { false }));
+                Assert.IsNotNull(teleop.Profile);
+                Assert.AreEqual(SessionKind.Sim, teleop.Profile.Kind,
+                    "A descriptor rebuild during a sim session keeps kind=sim");
+                Assert.IsTrue(teleop.Profile.RequireDeadman);
+                teleop.StopTeleop();
+            }
+            finally
+            {
+                ActiveSession.Clear();
+                NavGoalSession.Active.ResetForTests();
+                OperateSafetyLatch.Clear();
+                PolicyPanelController[] panelsAfter = UnityEngine.Object.FindObjectsOfType<PolicyPanelController>();
+                for (int i = 0; i < panelsAfter.Length; i++)
+                {
+                    bool existed = false;
+                    for (int j = 0; j < panelsBefore.Length; j++)
+                    {
+                        if (panelsAfter[i] == panelsBefore[j]) existed = true;
+                    }
+                    if (!existed && panelsAfter[i] != null)
+                        UnityEngine.Object.DestroyImmediate(panelsAfter[i].gameObject);
+                }
+                UnityEngine.Object.DestroyImmediate(teleopGo);
+                UnityEngine.Object.DestroyImmediate(appGo);
+            }
         }
 
         [Test]

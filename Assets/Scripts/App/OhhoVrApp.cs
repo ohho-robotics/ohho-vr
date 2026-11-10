@@ -282,6 +282,9 @@ namespace OmniBot.VR.App
                 return false;
             }
 
+            // FromDescriptor leaves Kind at the real default. The confirmed
+            // session is what decides turbo and the deadman rules.
+            RealRobotSafety.ApplyActiveSession(profile);
             PreparePolicyPanel(ActiveSession.Current != null ? ActiveSession.Current.Kind : (SessionKind?)null);
             teleopController.StartTeleop(profile);
             if (showUi) ShowTeleop();

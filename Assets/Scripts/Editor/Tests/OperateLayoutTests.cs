@@ -440,7 +440,52 @@ namespace OmniBot.VR.Tests
             OperateSafetyLatch.Clear();
             link.Published.Clear();
             scheme.ReleaseUiStop(link, gripHeld: false);
+            Assert.IsTrue(scheme.IsEmergencyStopActive,
+                "Operate reset does not clear a both-grips latch");
+            Assert.IsFalse(SawBool(link, false),
+                "Operate reset must not publish emergency_stop false over a controller latch");
+
+            var deadmanHeld = new TeleopInput
+            {
+                LeftGrip = true,
+                LeftStick = new Vector2(0f, 1f),
+                DeltaTime = 0.1f,
+            };
+            scheme.Tick(ref deadmanHeld, link);
+            Assert.IsTrue(scheme.IsEmergencyStopActive,
+                "A held deadman does not clear the controller latch");
+
+            var reset = new TeleopInput { ResetEmergencyStop = true, LeftGrip = true, DeltaTime = 0.1f };
+            scheme.Tick(ref reset, link);
+            var releaseDeadman = new TeleopInput { LeftGrip = false, DeltaTime = 0.1f };
+            scheme.Tick(ref releaseDeadman, link);
+            link.Published.Clear();
+            var repress = new TeleopInput
+            {
+                LeftGrip = true,
+                LeftStick = new Vector2(0f, 1f),
+                DeltaTime = 0.1f,
+            };
+            scheme.Tick(ref repress, link);
             Assert.IsFalse(scheme.IsEmergencyStopActive);
+            Assert.IsTrue(SawBool(link, false));
+
+            var operateOnly = new DifferentialDriveScheme();
+            operateOnly.Configure(DriveProfile());
+            OperateSafetyLatch.Latch();
+            var drive = new TeleopInput
+            {
+                LeftGrip = true,
+                LeftStick = new Vector2(0f, 1f),
+                DeltaTime = 0.1f,
+            };
+            operateOnly.Tick(ref drive, link);
+            Assert.IsTrue(operateOnly.IsEmergencyStopActive);
+            OperateSafetyLatch.Clear();
+            link.Published.Clear();
+            operateOnly.ReleaseUiStop(link, gripHeld: false);
+            Assert.IsFalse(operateOnly.IsEmergencyStopActive,
+                "An operate-screen stop still clears when that latch is reset");
             Assert.IsTrue(SawBool(link, false));
         }
 

@@ -181,6 +181,16 @@ namespace OmniBot.VR.Control.Drive
         }
 
         /// <summary>
+        /// Latch A+B, the HUD button, or both grips while the robot link and
+        /// sim-serve are both down. A press-and-release on those frames still
+        /// sticks. The clear sequence waits until a link can accept it.
+        /// </summary>
+        public void LatchStopWhileLinksDown(ref TeleopInput input, IRobotLink link)
+        {
+            LatchEmergencyStopWhileLinkDown(ref input, link);
+        }
+
+        /// <summary>
         /// E-stop clear uses the same deadman as flight: either grip, never both.
         /// </summary>
         protected override bool IsResetDeadmanHeld(in TeleopInput input)
