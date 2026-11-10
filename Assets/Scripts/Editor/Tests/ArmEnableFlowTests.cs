@@ -277,6 +277,59 @@ namespace OmniBot.VR.Tests
         }
 
         [Test]
+        public void Scheme_AAndB_AndLatchedDriveStop_BlockClutchedJog()
+        {
+            Tick(Enable(true), FarHand());
+            var jog = new ArmOperatorInput
+            {
+                ClutchHeld = true,
+                TrackingGood = false,
+                JogAxis = 1f,
+                DeltaTime = 1f,
+            };
+            Tick(jog, FarHand());
+            Tick(jog, FarHand());
+            int joints = _link.Count<JointStateMsg>();
+            Assert.Greater(joints, 0);
+
+            var ab = new TeleopInput { ButtonA = true, ButtonB = true, EmergencyStopPressed = true };
+            Tick(new ArmOperatorInput
+            {
+                EmergencyStop = TeleopController.ArmMotionBlocked(ab, false),
+                ClutchHeld = true,
+                TrackingGood = false,
+                JogAxis = 1f,
+                EnableRequested = true,
+                DeltaTime = 1f,
+            }, FarHand());
+            Assert.IsFalse(_scheme.ArmEnabled);
+            Assert.AreEqual(joints, _link.Count<JointStateMsg>(), "A+B stops clutched jog");
+
+            Tick(new ArmOperatorInput
+            {
+                EmergencyStop = TeleopController.ArmMotionBlocked(new TeleopInput { HudEmergencyStop = true }, false),
+                ClutchHeld = true,
+                TrackingGood = false,
+                JogAxis = 1f,
+                EnableRequested = true,
+                DeltaTime = 1f,
+            }, FarHand());
+            Assert.AreEqual(joints, _link.Count<JointStateMsg>(), "HUD e-stop stops clutched jog");
+
+            Tick(new ArmOperatorInput
+            {
+                EmergencyStop = TeleopController.ArmMotionBlocked(default, true),
+                ClutchHeld = true,
+                TrackingGood = false,
+                JogAxis = 1f,
+                EnableRequested = true,
+                DeltaTime = 1f,
+            }, FarHand());
+            Assert.IsFalse(_scheme.ArmEnabled);
+            Assert.AreEqual(joints, _link.Count<JointStateMsg>(), "A latched drive stop keeps the arm still");
+        }
+
+        [Test]
         public void Scheme_SetArmEnabledTrue_DoesNotConfirmReal()
         {
             Use(ArmDeployment.Real);

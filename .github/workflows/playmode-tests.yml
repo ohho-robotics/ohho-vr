@@ -69,6 +69,9 @@ jobs:
           UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
           UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
           UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+          # Same authenticated CLI lookup as editmode. An unauthenticated
+          # "latest" resolve returns 403 once the runner IP is rate limited.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           unityVersion: 6000.5.2f1
           customImage: unityci/editor:ubuntu-6000.5.2f1-android-3
@@ -103,7 +106,16 @@ jobs:
 
       - name: Start disposable rosbridge
         shell: bash
-        run: docker compose -f Tests/PlayMode/docker/compose.yml up -d --wait
+        run: |
+          set -euo pipefail
+          compose=(docker compose -f Tests/PlayMode/docker/compose.yml)
+          if "${compose[@]}" up -d --wait; then
+            exit 0
+          fi
+          echo "rosbridge did not become healthy; retrying once" >&2
+          "${compose[@]}" logs || true
+          "${compose[@]}" down || true
+          "${compose[@]}" up -d --wait
 
       - name: Rosbridge protocol smoke
         shell: bash

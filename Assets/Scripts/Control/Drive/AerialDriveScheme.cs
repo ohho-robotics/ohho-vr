@@ -18,7 +18,7 @@ namespace OmniBot.VR.Control.Drive
     public sealed class AerialDriveScheme : DriveSchemeBase
     {
         public override string HudHint =>
-            "Left Y: climb · Left X: yaw nose-right · Right stick: forward/right · Grip: deadman · Both grips: e-stop (latched until left X) · Takeoff/Land: buttons";
+            "Left Y: climb · Left X: yaw nose-right · Right stick: forward/right · Either grip: deadman · No turbo · Both grips, A+B, or HUD: e-stop (latched until Reset, then release and re-press the deadman) · Takeoff/Land: buttons";
 
         protected override string IdleMode => "offboard";
 
@@ -94,25 +94,30 @@ namespace OmniBot.VR.Control.Drive
         {
             if (!IsConfigured || Profile == null) return;
 
-            // Sim-serve has its own grip deadman. The Ohho e-stop is also the
-            // latched base stop: both grips set it, and releasing the grips
-            // does not clear it. Left X does, unless the operate-screen latch
-            // is still holding the stop.
-            if (OperateSafetyLatch.UiEStopLatched && !EmergencyStopActive)
-                TriggerEmergencyStop(link);
-            else if (input.BothGrips && !EmergencyStopActive)
-                TriggerEmergencyStop(link);
-            else if (input.ResetEmergencyStop && EmergencyStopActive && !input.BothGrips
-                     && !OperateSafetyLatch.UiEStopLatched)
-                ClearEmergencyStop(link);
+            // Sim-serve has its own grip deadman (either grip). The Ohho e-stop
+            // latches on both grips, A+B, the HUD button, or the operate-screen
+            // latch. Releasing them does not clear it. A controller latch clears
+            // only after Reset, a deadman release, and a re-press. Either grip
+            // is that deadman. The clear is refused while the operate latch is
+            // set. There is no turbo.
+            RobotClassCaps.Ensure(Profile);
+            // Ground Tick flushes this before handling the latch. Aerial owns Tick,
+            // so a stop taken while the robot link was down is published here once
+            // the link can accept it. Sim-serve still uses its own sender.
+            FlushPendingEmergencyStop(link);
+            HandleEmergencyStop(ref input, link);
 
             bool latched = EmergencyStopActive;
+            float linCap = Mathf.Max(0f, Profile.MaxLinVel);
+            float angCap = Mathf.Max(0f, Profile.MaxAngVel);
+            if (Profile.HardMaxLinVel > 0f) linCap = Mathf.Min(linCap, Profile.HardMaxLinVel);
+            if (Profile.HardMaxAngVel > 0f) angCap = Mathf.Min(angCap, Profile.HardMaxAngVel);
             var mapped = new AerialMappingInput
             {
                 RobotId = Profile.RobotId,
                 RobotName = Profile.Name,
-                MaxLinVel = Profile.MaxLinVel,
-                MaxAngVel = Profile.MaxAngVel,
+                MaxLinVel = linCap,
+                MaxAngVel = angCap,
                 LeftX = latched ? 0f : input.LeftStick.x,
                 LeftY = latched ? 0f : input.LeftStick.y,
                 RightX = latched ? 0f : input.RightStick.x,
@@ -175,6 +180,54 @@ namespace OmniBot.VR.Control.Drive
                 _sender.Send(SimServeAerialJson.Serialize(cmd));
         }
 
+        /// <summary>
+        /// Latch A+B, the HUD button, or both grips while the robot link and
+        /// sim-serve are both down. A press-and-release on those frames still
+        /// sticks. The clear sequence waits until a link can accept it.
+        /// </summary>
+        public void LatchStopWhileLinksDown(ref TeleopInput input, IRobotLink link)
+        {
+            LatchEmergencyStopWhileLinkDown(ref input, link);
+        }
+
+        /// <summary>
+        /// E-stop clear uses the same deadman as flight: either grip, never both.
+        /// </summary>
+        protected override bool IsResetDeadmanHeld(in TeleopInput input)
+        {
+            return EitherGripDeadman(input);
+        }
+
+        /// <summary>
+        /// Either grip is the aerial deadman. Both grips stay the e-stop chord.
+        /// </summary>
+        public static bool EitherGripDeadman(in TeleopInput input)
+        {
+            bool both = input.BothGrips || (input.LeftGrip && input.RightGrip);
+            return (input.LeftGrip || input.RightGrip) && !both;
+        }
+
+        /// <summary>
+        /// Stick hold after a presence drop. A right-grip-only pilot can finish
+        /// the release and re-press. Both grips do not count as that re-press.
+        /// </summary>
+        public static void AdvancePostLossHold(
+            ref bool motionHeld,
+            ref bool deadmanReleased,
+            in TeleopInput input,
+            bool operatorPresent,
+            bool safetyLatched)
+        {
+            if (!motionHeld || !operatorPresent || safetyLatched) return;
+            if (!EitherGripDeadman(input))
+                deadmanReleased = true;
+            else if (deadmanReleased)
+            {
+                motionHeld = false;
+                deadmanReleased = false;
+            }
+        }
+
         protected override TwistMsg ComputeVelocity(
             float lx, float ly, float rx, float ry, float speedMult, out bool hasInput)
         {
@@ -183,8 +236,12 @@ namespace OmniBot.VR.Control.Drive
             // signs, still with no turbo. The grip deadman and the latched
             // e-stop live in Tick, not in this twist helper.
             _ = speedMult;
+            float linCap = Profile.MaxLinVel;
+            float angCap = Profile.MaxAngVel;
+            if (Profile.HardMaxLinVel > 0f) linCap = Mathf.Min(linCap, Profile.HardMaxLinVel);
+            if (Profile.HardMaxAngVel > 0f) angCap = Mathf.Min(angCap, Profile.HardMaxAngVel);
             AerialAxes axes = AerialDriveMapping.ScaleDeadzoned(
-                lx, ly, rx, ry, Profile.MaxLinVel, Profile.MaxAngVel);
+                lx, ly, rx, ry, linCap, angCap);
             hasInput = axes.Vx != 0f || axes.Vy != 0f || axes.Vz != 0f || axes.YawRate != 0f;
             return new TwistMsg(
                 new Vector3Msg(axes.Vx, axes.Vy, axes.Vz),

@@ -6,7 +6,9 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 using OmniBot.VR.Control;
+using OmniBot.VR.Control.Drive;
 using OmniBot.VR.Control.Preflight;
+using OmniBot.VR.Control.Safety;
 using OmniBot.VR.Control.Session;
 using OmniBot.VR.Core;
 using OmniBot.VR.Core.Platform;
@@ -28,6 +30,7 @@ namespace OmniBot.VR.Tests
         [SetUp]
         public void SetUp()
         {
+            OperateSafetyLatch.Clear();
             _session = NavGoalSession.Active;
             _session.ResetForTests();
             _transport = new FakeTransport();
@@ -38,6 +41,7 @@ namespace OmniBot.VR.Tests
         [TearDown]
         public void TearDown()
         {
+            OperateSafetyLatch.Clear();
             _session.ResetForTests();
         }
 
@@ -238,6 +242,105 @@ namespace OmniBot.VR.Tests
             Assert.IsTrue(_link.Published.Exists(p => p.topic == "/mission/cancel" && p.json.Contains("cancel")));
             Assert.IsTrue(_transport.Raw.Exists(j => j.Contains("cancel_action_goal") && j.Contains(goal["id"].ToString())));
             Assert.IsTrue(_link.Published.Exists(p => p.topic == "/control_mode" && p.json.Contains("teleop")));
+        }
+
+        [Test]
+        public void Estop_CancelsNavGoal_BlocksAnother_AndDoesNotPublishNav2()
+        {
+            var kitchen = _session.Waypoints.First(w => w.Name == "kitchen");
+            var scheme = ControlSchemeFactory.CreateDriveScheme(DriveProfile(RobotDeployment.Sim));
+            var driving = DrivingStick();
+            scheme.Tick(ref driving, _link);
+            Assert.IsTrue(_session.SendGoal(kitchen));
+
+            var stop = new TeleopInput
+            {
+                ButtonA = true,
+                ButtonB = true,
+                EmergencyStopPressed = true,
+                LeftGrip = true,
+                LeftStick = new Vector2(0f, 1f),
+                DeltaTime = 0.05f,
+            };
+            scheme.Tick(ref stop, _link);
+            var drive = (DriveSchemeBase)scheme;
+            Assert.IsTrue(drive.IsEmergencyStopActive);
+            Assert.IsFalse(_session.GoalActive);
+            Assert.IsFalse(_session.ModeIsNav2);
+            Assert.IsTrue(_link.Published.Exists(p => p.topic == "/mission/cancel" && p.json.Contains("cancel")));
+            Assert.IsTrue(_transport.Raw.Exists(j => j.Contains("cancel_action_goal")));
+            Assert.IsFalse(_session.SendGoal(kitchen));
+
+            _link.Published.Clear();
+            var idle = new TeleopInput { LeftGrip = true, DeltaTime = 0.6f };
+            scheme.Tick(ref idle, _link);
+            Assert.IsFalse(PublishedNav2(), "Idle while e-stop is latched must not publish nav2");
+            scheme.Stop(_link);
+            Assert.IsFalse(PublishedNav2(), "Stop while e-stop is latched must not publish nav2");
+
+            var reset = new TeleopInput { ResetEmergencyStop = true, LeftGrip = false, DeltaTime = 0.05f };
+            scheme.Tick(ref reset, _link);
+            var repress = new TeleopInput
+            {
+                LeftGrip = true,
+                LeftStick = new Vector2(0f, 1f),
+                DeltaTime = 0.05f,
+            };
+            scheme.Tick(ref repress, _link);
+            Assert.IsFalse(drive.IsEmergencyStopActive);
+            Assert.IsTrue(_session.SendGoal(kitchen));
+        }
+
+        [Test]
+        public void OperateEStop_BlocksNavGoalUntilReset()
+        {
+            var kitchen = _session.Waypoints.First(w => w.Name == "kitchen");
+            Assert.IsTrue(_session.SendGoal(kitchen));
+            OperateSafetyLatch.Latch();
+            Assert.IsFalse(_session.SendGoal(kitchen));
+            int rawBefore = _transport.Raw.Count;
+            _session.RequestMode("nav2");
+            Assert.AreEqual(rawBefore, _transport.Raw.Count, "nav2 mode is refused while the operate latch is held");
+            Assert.AreEqual("e-stop", _session.StatusText);
+
+            var scheme = ControlSchemeFactory.CreateDriveScheme(DriveProfile(RobotDeployment.Real));
+            Assert.IsFalse(_session.GoalActive, "Configuring a scheme under the operate latch cancels the goal");
+            Assert.IsTrue(
+                _transport.Published.Exists(p => p.topic == "/mission/cancel" && p.json.Contains("cancel"))
+                || _link.Published.Exists(p => p.topic == "/mission/cancel" && p.json.Contains("cancel")));
+            var input = DrivingStick();
+            scheme.Tick(ref input, _link);
+            Assert.IsFalse(_session.GoalActive);
+            Assert.IsFalse(PublishedNav2(), "Operate e-stop must not publish nav2");
+
+            OperateSafetyLatch.Clear();
+            ((DriveSchemeBase)scheme).ReleaseUiStop(_link, gripHeld: false);
+            Assert.IsTrue(_session.SendGoal(kitchen));
+        }
+
+        [Test]
+        public void RobotLatchedEStop_CancelsNavGoalUntilSafetyClears()
+        {
+            var kitchen = _session.Waypoints.First(w => w.Name == "kitchen");
+            Assert.IsTrue(_session.SendGoal(kitchen));
+            var safety = new TeleopSafetySession(() => 10d);
+            var scheme = ControlSchemeFactory.CreateDriveScheme(DriveProfile(RobotDeployment.Sim));
+            safety.ApplySafetyState("{\"armed\":false,\"latched\":true,\"reason\":\"estop\"}");
+            var input = DrivingStick();
+            safety.Tick(_link, ref input, scheme, null, null);
+            Assert.IsTrue(safety.Latched);
+            Assert.IsFalse(_session.GoalActive);
+            Assert.IsFalse(_session.SendGoal(kitchen));
+
+            _link.Published.Clear();
+            var idle = new TeleopInput { LeftGrip = true, DeltaTime = 0.6f };
+            safety.Tick(_link, ref idle, scheme, null, null);
+            Assert.IsFalse(PublishedNav2(), "Robot e-stop must not fall through to nav2");
+
+            safety.ApplySafetyState("{\"armed\":true,\"latched\":false,\"reason\":\"\"}");
+            safety.Tick(_link, ref input, scheme, null, null);
+            Assert.IsFalse(safety.Latched);
+            Assert.IsTrue(_session.SendGoal(kitchen));
         }
 
         // ── Waypoints ────────────────────────────────────────────────────────
@@ -745,6 +848,11 @@ waypoints:
                 RobotType = new VrRobotType { Id = "omnibot", Name = "OmniBot" },
                 Category = new VrCategory { Id = "mobile-manipulator" },
             };
+        }
+
+        private bool PublishedNav2()
+        {
+            return _link.Published.Exists(p => p.topic == "/control_mode" && p.json.Contains("\"nav2\""));
         }
 
         private int GoalSends()

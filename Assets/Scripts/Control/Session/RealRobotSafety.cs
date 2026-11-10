@@ -54,9 +54,20 @@ namespace OmniBot.VR.Control.Session
         public static void Apply(RobotProfile profile, SessionKind kind)
         {
             if (profile == null) return;
+            profile.Kind = kind;
             profile.RequireDeadman = true;
-            if (kind == SessionKind.Real)
-                profile.RequireDeadman = true;
+        }
+
+        /// <summary>
+        /// A descriptor rebuild replaces the profile and leaves
+        /// <see cref="RobotProfile.Kind"/> at the real default. Copy the session
+        /// the operator already confirmed so a sim session keeps turbo and the
+        /// sim deadman rules.
+        /// </summary>
+        public static void ApplyActiveSession(RobotProfile profile)
+        {
+            if (profile == null || ActiveSession.Current == null) return;
+            Apply(profile, ActiveSession.Current.Kind);
         }
     }
 

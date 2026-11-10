@@ -88,6 +88,19 @@ namespace OmniBot.VR.Control
         /// <summary>ip:port the latch was taken on. Empty when no ConnectionManager is loaded.</summary>
         private string _emergencyStopEndpoint;
 
+        /// <summary>
+        /// The latched stop never reached the robot. The replacement scheme
+        /// publishes <c>emergency_stop</c> true on the next connected tick.
+        /// </summary>
+        private bool _emergencyStopPublishPending;
+
+        /// <summary>
+        /// The saved stop came from A+B, the HUD button, or both grips.
+        /// An operate-bar stop leaves this false so a rebuild does not turn it
+        /// into a controller latch that operate Reset cannot clear.
+        /// </summary>
+        private bool _emergencyStopControllerOwned;
+
         /// <summary>When set, replaces the ConnectionManager endpoint (edit-mode tests).</summary>
         private string _endpointKeyOverride;
 
@@ -110,8 +123,19 @@ namespace OmniBot.VR.Control
         private GameObject _ownedOrigin;
         private WorkspaceSphereVisual _workspaceVisual;
 
-        // ── Previous both-grips state for edge detection ─────────────────────────
+        // ── Button edges, and a HUD e-stop press held until the scheme latches ─
         private bool _prevBothGrips;
+        private bool _prevEmergencyChord;
+        private bool _hudEmergencyStop;
+        // Policy hears true on the latch edge and false only after that latch clears.
+        private bool _policyEstopReported;
+        // Fixed-base arms have no drive scheme. The same Reset + deadman sequence
+        // owns this latch, and it publishes emergency_stop on its own.
+        private bool _armEStopLatched;
+        private bool _armEStopController;
+        private bool _armEStopResetAccepted;
+        private bool _armEStopDeadmanReleased;
+        private bool _armEStopPublishPending;
         private bool _ownsLatencyCapture;
         private TeleopInput _lastInput;
         private SimServeAerialClient _aerialClient;
@@ -237,51 +261,75 @@ namespace OmniBot.VR.Control
                 LatencyCapture.MarkInputSample();
 
             var input = ReadInput();
+            PumpFrame(input, linkUp, aerialUp);
+        }
+
+        /// <summary>
+        /// One control frame after input is sampled. Edit-mode tests call this
+        /// with a crafted sample so a dropped link still has to latch e-stop.
+        /// </summary>
+        private void PumpFrame(TeleopInput input, bool linkUp, bool aerialUp)
+        {
+            if (_hudEmergencyStop)
+                input.HudEmergencyStop = true;
             _lastInput = input;
 
-            // Tell a running policy about the same both-grips edge the drive
-            // uses for e-stop. Exceptions must not skip the drive tick.
-            if (input.BothGripsPressed)
-                Raise(EmergencyStopChanged, true);
-            else if (input.BothGripsReleased)
-                Raise(EmergencyStopChanged, false);
+            // Both grips, A+B, and the HUD button latch e-stop. A policy yields
+            // on those edges. Releasing the grips does not clear it. The false
+            // edge is published only after the latch itself clears.
+            NotifyEmergencyStopEdges(input);
 
             // Heartbeat, latched e-stop, and the ground deadman always run.
             // Aerial is omitted from this tick: safety only drives while the
             // robot link is up, and sim-serve can be connected without it.
+            // A fixed-base latch is applied first so the arm samples the stop
+            // that this frame just took or cleared.
+            bool aerialScheme = _drive is AerialDriveScheme;
+            if (!aerialScheme && !(_drive is DriveSchemeBase))
+                TickArmOnlyEStop(ref input);
             IDriveScheme groundDrive = aerialScheme ? null : _drive;
             _safety.Tick(Link, ref input, groundDrive, _manip, TickManipulation);
             if (_safety.ConsumeLinkRestored())
                 AdvertiseTopics(Profile);
 
-            if (aerialScheme && (linkUp || aerialUp))
+            if (aerialScheme)
             {
-                bool deadman = TeleopSafetySession.IsDeadmanHeld(input);
-                if (_aerialMotionHeld && _safety.OperatorPresent && !_safety.Latched)
+                if (linkUp || aerialUp)
                 {
-                    if (!deadman)
-                        _aerialDeadmanReleased = true;
-                    else if (_aerialDeadmanReleased)
+                    // Either grip unsticks sticks after a presence drop. The ground
+                    // deadman stays the left grip; this hold is aerial only.
+                    AerialDriveScheme.AdvancePostLossHold(
+                        ref _aerialMotionHeld,
+                        ref _aerialDeadmanReleased,
+                        input,
+                        _safety.OperatorPresent,
+                        _safety.Latched);
+
+                    var aerialInput = input;
+                    if (!_safety.OperatorPresent || _safety.Latched || _aerialMotionHeld)
                     {
-                        _aerialMotionHeld = false;
-                        _aerialDeadmanReleased = false;
+                        // Grip deadman and both-grip e-stop still reach the scheme.
+                        // Stick axes stay at zero until presence is back and the
+                        // deadman has been released and pressed again.
+                        aerialInput.LeftStick = Vector2.zero;
+                        aerialInput.RightStick = Vector2.zero;
                     }
-                }
 
-                var aerialInput = input;
-                if (!_safety.OperatorPresent || _safety.Latched || _aerialMotionHeld)
+                    _drive.Tick(ref aerialInput, Link);
+                }
+                else if (_drive is AerialDriveScheme aerial)
                 {
-                    // Grip deadman and both-grip e-stop still reach the scheme.
-                    // Stick axes stay at zero until presence is back and the
-                    // deadman has been released and pressed again.
-                    aerialInput.LeftStick = Vector2.zero;
-                    aerialInput.RightStick = Vector2.zero;
+                    // Both links are down. ReadInput still advances the A+B edge,
+                    // so this frame has to latch or a press-and-release is lost.
+                    aerial.LatchStopWhileLinksDown(ref input, Link);
                 }
-
-                _drive.Tick(ref aerialInput, Link);
             }
 
+            if (_hudEmergencyStop && IsGripEStopActive)
+                _hudEmergencyStop = false;
+
             RememberLatchEndpoint();
+            PublishPolicyEStopFromLatch();
         }
 
         private TeleopInput ReadInput()
@@ -296,8 +344,14 @@ namespace OmniBot.VR.Control
             bool bothGrips = leftGrip && rightGrip;
             BothGripsHeld = bothGrips;
             AnyGripHeld = leftGrip || rightGrip;
-            // Left X is the explicit e-stop reset. Grip release must not clear it:
-            // one grip is the deadman and the right grip is also turbo.
+            // A and B together latch e-stop. Right trigger is the arm clutch and,
+            // in a kind=sim session only, base turbo. Left X starts the clear.
+            // Grip release must not clear it: the left grip is the deadman.
+            bool buttonA = OVRInput.Get(OVRInput.Button.One, OVRInput.Controller.RTouch);
+            bool buttonB = OVRInput.Get(OVRInput.Button.Two, OVRInput.Controller.RTouch);
+            bool rightTrigger = OVRInput.Get(OVRInput.Button.SecondaryIndexTrigger, OVRInput.Controller.RTouch) ||
+                                OVRInput.Get(OVRInput.Axis1D.SecondaryIndexTrigger, OVRInput.Controller.RTouch) > 0.8f;
+            bool emergencyChord = buttonA && buttonB;
             bool resetEStop = OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.LTouch);
 
             var input = new TeleopInput
@@ -306,9 +360,14 @@ namespace OmniBot.VR.Control
                 RightStick = rightStick,
                 LeftGrip = leftGrip,
                 RightGrip = rightGrip,
+                RightTrigger = rightTrigger,
+                ButtonA = buttonA,
+                ButtonB = buttonB,
                 BothGrips = bothGrips,
                 BothGripsPressed = bothGrips && !_prevBothGrips,
                 BothGripsReleased = !bothGrips && _prevBothGrips,
+                EmergencyStopPressed = emergencyChord && !_prevEmergencyChord,
+                HudEmergencyStop = _hudEmergencyStop,
                 ResetEmergencyStop = resetEStop,
                 DeltaTime = Time.deltaTime,
             };
@@ -316,6 +375,7 @@ namespace OmniBot.VR.Control
                 input,
                 ComfortSettingsStore.Current.LeftHandedControls);
             _prevBothGrips = bothGrips;
+            _prevEmergencyChord = emergencyChord;
             return input;
         }
 
@@ -340,20 +400,32 @@ namespace OmniBot.VR.Control
                 TickThumbsUpToggle(gestureDetector.leftHand);
             }
 
-            bool clutch = OVRInput.Get(OVRInput.Axis1D.SecondaryIndexTrigger, OVRInput.Controller.RTouch) >= ClutchTriggerThreshold
-                || OVRInput.Get(OVRInput.Button.SecondaryIndexTrigger, OVRInput.Controller.RTouch);
-            bool xDown = OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.LTouch);
-            bool cycleJoint = OVRInput.GetDown(OVRInput.Button.PrimaryThumbstick, OVRInput.Controller.LTouch);
+            bool clutch = false;
+            bool xDown = false;
+            bool cycleJoint = false;
+            try
+            {
+                clutch = OVRInput.Get(OVRInput.Axis1D.SecondaryIndexTrigger, OVRInput.Controller.RTouch) >= ClutchTriggerThreshold
+                    || OVRInput.Get(OVRInput.Button.SecondaryIndexTrigger, OVRInput.Controller.RTouch);
+                xDown = OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.LTouch);
+                cycleJoint = OVRInput.GetDown(OVRInput.Button.PrimaryThumbstick, OVRInput.Controller.LTouch);
+            }
+            catch (Exception)
+            {
+                // Editor and headless runs have no OVR plugin. The arm e-stop
+                // below still has to be applied from the sampled input.
+            }
             bool thumbsPulse = _thumbsUpPulse;
             _thumbsUpPulse = false;
 
+            bool driveLatched = IsGripEStopActive;
             var armInput = new ArmOperatorInput
             {
                 ClutchHeld = clutch,
                 TrackingGood = trackingGood,
                 JogAxis = _lastInput.RightStick.y,
                 CycleJointPressed = cycleJoint,
-                EmergencyStop = _lastInput.BothGrips,
+                EmergencyStop = ArmMotionBlocked(_lastInput, driveLatched),
                 DeltaTime = _lastInput.DeltaTime,
             };
             // Left X confirms a pending REAL enable. A thumbs-up never does.
@@ -406,14 +478,22 @@ namespace OmniBot.VR.Control
             // scheme still must not keep the previous robot's map and goal.
             if (_drive == null)
                 NavGoalSession.Active.BeginRobot(profile);
-            if (_emergencyStopLatched && _drive is DriveSchemeBase drive)
+            if (_emergencyStopLatched)
             {
                 if (SameEndpoint(_emergencyStopEndpoint, CurrentEndpointKey()))
-                    drive.RestoreEmergencyStopLatch();
+                {
+                    if (_drive is DriveSchemeBase drive)
+                        drive.RestoreEmergencyStopLatch(_emergencyStopPublishPending, _emergencyStopControllerOwned);
+                    else
+                        RestoreArmEmergencyStop(_emergencyStopPublishPending, _emergencyStopControllerOwned);
+                }
                 else
                 {
                     _emergencyStopLatched = false;
                     _emergencyStopEndpoint = null;
+                    _emergencyStopPublishPending = false;
+                    _emergencyStopControllerOwned = false;
+                    NavGoalSession.Active.SetHeadsetBlock(false, null);
                 }
             }
             AttachAerialClient(_drive);
@@ -430,6 +510,7 @@ namespace OmniBot.VR.Control
             Debug.Log($"[TeleopController] Teleop started — {profile.Name} ({profile.Drive}, arm {(profile.HasArm ? $"{profile.ArmDof}-DOF" : "none")}), IK={profile.IkLocation}.");
             Raise(TeleopSessionStarted, profile);
             TeleopStarted?.Invoke(profile);
+            PublishPolicyEStopFromLatch();
         }
 
         private void ConfigureSurfaces(RobotProfile profile)
@@ -455,11 +536,37 @@ namespace OmniBot.VR.Control
                     if (!_emergencyStopLatched || _emergencyStopEndpoint == null)
                         _emergencyStopEndpoint = CurrentEndpointKey();
                     _emergencyStopLatched = true;
+                    // Read before Stop. A drop may have latched without a publish.
+                    _emergencyStopPublishPending = drive.EmergencyStopPublishPending;
+                    _emergencyStopControllerOwned = drive.ControllerStopLatched;
                 }
                 else
                 {
                     _emergencyStopLatched = false;
                     _emergencyStopEndpoint = null;
+                    _emergencyStopPublishPending = false;
+                    _emergencyStopControllerOwned = false;
+                }
+            }
+            else if (_teleopActive)
+            {
+                // The arm latch lives on this controller. Copy it before the
+                // cleanup below clears the live flags. A second stop, after
+                // teleop is already inactive, leaves the saved latch alone.
+                if (_armEStopLatched)
+                {
+                    if (!_emergencyStopLatched || _emergencyStopEndpoint == null)
+                        _emergencyStopEndpoint = CurrentEndpointKey();
+                    _emergencyStopLatched = true;
+                    _emergencyStopPublishPending = _armEStopPublishPending;
+                    _emergencyStopControllerOwned = _armEStopController;
+                }
+                else
+                {
+                    _emergencyStopLatched = false;
+                    _emergencyStopEndpoint = null;
+                    _emergencyStopPublishPending = false;
+                    _emergencyStopControllerOwned = false;
                 }
             }
             if (!_teleopActive && _drive == null && _manip == null) return;
@@ -478,21 +585,39 @@ namespace OmniBot.VR.Control
             Profile = null;
             _wasThumbsUp = false;
             _thumbsUpHoldTimer = 0f;
+            _prevBothGrips = false;
+            _prevEmergencyChord = false;
+            _hudEmergencyStop = false;
+            _armEStopLatched = false;
+            _armEStopController = false;
+            _armEStopResetAccepted = false;
+            _armEStopDeadmanReleased = false;
+            _armEStopPublishPending = false;
             if (LatencyCapture.IsEnabled)
                 LatencyCapture.ClearInputSample();
             _thumbsUpPulse = false;
             if (_workspaceVisual != null)
             {
-                Destroy(_workspaceVisual.gameObject);
+                DestroyOwned(_workspaceVisual.gameObject);
                 _workspaceVisual = null;
             }
             if (_originOwned && _ownedOrigin != null)
             {
-                Destroy(_ownedOrigin);
+                DestroyOwned(_ownedOrigin);
                 _ownedOrigin = null;
                 handWorkspaceOrigin = null;
                 _originOwned = false;
             }
+        }
+
+        /// <summary>
+        /// Edit-mode tests stop teleop. <see cref="Object.Destroy"/> is play mode only.
+        /// </summary>
+        private void DestroyOwned(UnityEngine.Object obj)
+        {
+            if (obj == null) return;
+            if (Application.isPlaying) Destroy(obj);
+            else DestroyImmediate(obj);
         }
 
         private static void Raise(Action action)
@@ -516,23 +641,79 @@ namespace OmniBot.VR.Control
         /// <summary>Either grip is down this frame. Display-only deadman readout.</summary>
         public bool AnyGripHeld { get; private set; }
 
-        /// <summary>Grip e-stop is currently holding the drive scheme.</summary>
-        public bool IsGripEStopActive => _drive is DriveSchemeBase scheme && scheme.IsEmergencyStopActive;
+        /// <summary>
+        /// A controller e-stop is holding the drive scheme, or a fixed-base arm
+        /// that has no drive scheme.
+        /// </summary>
+        public bool IsGripEStopActive =>
+            (_drive is DriveSchemeBase scheme && scheme.IsEmergencyStopActive) || _armEStopLatched;
 
         /// <summary>Same transport the drive and arm schemes publish on.</summary>
         public IRobotLink RobotLink => Link;
 
         /// <summary>
-        /// Both-grips e-stop edge. True when the existing deadman presses.
-        /// Drive and arm behaviour are unchanged; a policy must yield on true.
+        /// E-stop edge for a running policy. True for both grips, A+B, and the HUD button.
+        /// False only after that latch has cleared through Reset and a deadman re-press.
         /// </summary>
         public event Action<bool> EmergencyStopChanged;
+
+        private void NotifyEmergencyStopEdges(TeleopInput input)
+        {
+            if (input.BothGripsPressed || input.EmergencyStopPressed || input.HudEmergencyStop)
+            {
+                // The HUD button may already have reported this latch. This
+                // control frame still has to yield a policy that is running
+                // on the sample. False waits until the latch itself clears.
+                _policyEstopReported = true;
+                Raise(EmergencyStopChanged, true);
+            }
+        }
+
+        /// <summary>
+        /// Keep the policy latch aligned with the drive or fixed-base latch.
+        /// A grip release while that latch is still held does not publish false,
+        /// so <c>control_mode=vla</c> cannot start under a latched stop.
+        /// </summary>
+        private void PublishPolicyEStopFromLatch()
+        {
+            RaisePolicyEStop(IsGripEStopActive || OperateSafetyLatch.UiEStopLatched);
+        }
+
+        private void RaisePolicyEStop(bool latched)
+        {
+            if (latched == _policyEstopReported) return;
+            _policyEstopReported = latched;
+            Raise(EmergencyStopChanged, latched);
+        }
 
         /// <summary>Fired after a profile is applied and topics are advertised.</summary>
         public event Action<RobotProfile> TeleopSessionStarted;
 
         /// <summary>Fired after the schemes stop. A running policy must hand back first.</summary>
         public event Action TeleopSessionStopped;
+
+        /// <summary>
+        /// HUD e-stop. Latches until Reset plus a deadman release and re-press.
+        /// Releasing the button does not clear it. The request sticks until a
+        /// connected tick accepts it. A running policy yields on this call.
+        /// </summary>
+        public void RequestHudEmergencyStop()
+        {
+            _hudEmergencyStop = true;
+            RaisePolicyEStop(true);
+        }
+
+        /// <summary>
+        /// Arm motion stops for every e-stop source, for the whole drive latch.
+        /// Both grips, A+B, and the HUD button all count. The latch covers the
+        /// frames after a one-shot HUD press has been consumed.
+        /// </summary>
+        public static bool ArmMotionBlocked(in TeleopInput input, bool driveLatched)
+        {
+            if (driveLatched || input.BothGrips || input.HudEmergencyStop || input.EmergencyStopPressed)
+                return true;
+            return input.ButtonA && input.ButtonB;
+        }
 
         /// <summary>
         /// Point the live feed at the operate sim slot. Stops the previous feed
@@ -563,6 +744,11 @@ namespace OmniBot.VR.Control
         public void LatchOperateEStop()
         {
             OperateSafetyLatch.Latch();
+            RaisePolicyEStop(true);
+            if (_drive is DriveSchemeBase scheme)
+                scheme.HoldNavForLatchedStop(Link);
+            else
+                NavGoalSession.Active.SetHeadsetBlock(true, Link);
             if (Profile?.Topics == null || !Link.IsConnected) return;
             if (!string.IsNullOrEmpty(Profile.Topics.EmergencyStop))
                 Link.Publish(Profile.Topics.EmergencyStop, new BoolMsg(true));
@@ -572,7 +758,9 @@ namespace OmniBot.VR.Control
 
         /// <summary>
         /// Clear the operate-bar latch. Does nothing while both grips are held,
-        /// and does not publish a mode change.
+        /// and does not publish a mode change. A controller stop (A+B, the HUD
+        /// button, or both grips) stays latched until Reset plus a deadman
+        /// release and re-press, including while that deadman is still held.
         /// </summary>
         public bool TryResetOperateEStop()
         {
@@ -580,16 +768,31 @@ namespace OmniBot.VR.Control
             bool schemeStopped = IsGripEStopActive;
             bool wasLatched = OperateSafetyLatch.UiEStopLatched || schemeStopped;
             OperateSafetyLatch.Clear();
-            if (!wasLatched) return true;
+            if (!wasLatched)
+            {
+                PublishPolicyEStopFromLatch();
+                return true;
+            }
             if (_drive is DriveSchemeBase scheme)
                 scheme.ReleaseUiStop(Link, gripHeld: false);
+            else if (_armEStopController)
+            {
+                // The operate bar is clear. The arm latch stays until the
+                // deadman sequence in TickArmOnlyEStop.
+            }
+            else if (_armEStopLatched)
+                ArmClearEStop(Link);
             else if (Profile?.Topics != null && Link.IsConnected)
             {
                 if (!string.IsNullOrEmpty(Profile.Topics.EmergencyStop))
                     Link.Publish(Profile.Topics.EmergencyStop, new BoolMsg(false));
                 if (!string.IsNullOrEmpty(Profile.Topics.CmdVel))
                     Link.Publish(Profile.Topics.CmdVel, new TwistMsg(new Vector3Msg(0f, 0f, 0f), new Vector3Msg(0f, 0f, 0f)));
+                NavGoalSession.Active.SetHeadsetBlock(false, null);
             }
+            else
+                NavGoalSession.Active.SetHeadsetBlock(false, null);
+            PublishPolicyEStopFromLatch();
             return true;
         }
 
@@ -621,20 +824,130 @@ namespace OmniBot.VR.Control
         /// </summary>
         private void ReleaseLatchIfEndpointChanged()
         {
-            if (!(_drive is DriveSchemeBase drive) || !drive.IsEmergencyStopActive) return;
+            bool driveLatched = _drive is DriveSchemeBase drive && drive.IsEmergencyStopActive;
+            if (!driveLatched && !_armEStopLatched) return;
             if (!_emergencyStopLatched || _emergencyStopEndpoint == null) return;
             if (SameEndpoint(_emergencyStopEndpoint, CurrentEndpointKey())) return;
-            drive.DiscardEmergencyStopLatch();
+            if (driveLatched && _drive is DriveSchemeBase scheme)
+                scheme.DiscardEmergencyStopLatch();
+            ClearArmEStopLocal();
             _emergencyStopLatched = false;
             _emergencyStopEndpoint = null;
+            _emergencyStopPublishPending = false;
+            _emergencyStopControllerOwned = false;
         }
 
         private void RememberLatchEndpoint()
         {
-            if (!(_drive is DriveSchemeBase drive) || !drive.IsEmergencyStopActive) return;
+            bool driveLatched = _drive is DriveSchemeBase drive && drive.IsEmergencyStopActive;
+            if (!driveLatched && !_armEStopLatched) return;
             if (_emergencyStopLatched && _emergencyStopEndpoint != null) return;
             _emergencyStopLatched = true;
             _emergencyStopEndpoint = CurrentEndpointKey();
+        }
+
+        private void TickArmOnlyEStop(ref TeleopInput input)
+        {
+            IRobotLink link = Link;
+            bool linkUp = link != null && link.IsConnected;
+            if (linkUp)
+                FlushArmEStop(link);
+
+            bool abHeld = input.ButtonA && input.ButtonB;
+            bool chord = input.EmergencyStopPressed || input.HudEmergencyStop || input.BothGripsPressed
+                || input.BothGrips || abHeld;
+            if (chord)
+            {
+                _armEStopController = true;
+                _armEStopResetAccepted = false;
+                _armEStopDeadmanReleased = false;
+                if (!_armEStopLatched)
+                    ArmTriggerEStop(link);
+                return;
+            }
+
+            // A dropped link cannot accept the clear, and it must not drop the latch.
+            if (!linkUp) return;
+
+            if (OperateSafetyLatch.UiEStopLatched)
+            {
+                _armEStopResetAccepted = false;
+                _armEStopDeadmanReleased = false;
+                if (!_armEStopLatched)
+                    ArmTriggerEStop(link);
+                return;
+            }
+
+            if (!_armEStopLatched || !_armEStopController) return;
+            if (input.BothGrips || abHeld || (input.LeftGrip && input.RightGrip)) return;
+
+            if (input.ResetEmergencyStop)
+                _armEStopResetAccepted = true;
+            bool deadman = input.LeftGrip;
+            if (_armEStopResetAccepted && !deadman)
+                _armEStopDeadmanReleased = true;
+            if (_armEStopResetAccepted && _armEStopDeadmanReleased && deadman)
+                ArmClearEStop(link);
+        }
+
+        private void ArmTriggerEStop(IRobotLink link)
+        {
+            _armEStopLatched = true;
+            _armEStopResetAccepted = false;
+            _armEStopDeadmanReleased = false;
+            bool linkUp = link != null && link.IsConnected;
+            if (linkUp)
+                PublishArmEStop(link, true);
+            _armEStopPublishPending = !linkUp;
+            NavGoalSession.Active.SetHeadsetBlock(true, linkUp ? link : null);
+        }
+
+        private void ArmClearEStop(IRobotLink link)
+        {
+            _armEStopLatched = false;
+            _armEStopController = false;
+            _armEStopPublishPending = false;
+            _armEStopResetAccepted = false;
+            _armEStopDeadmanReleased = false;
+            if (!OperateSafetyLatch.UiEStopLatched)
+                NavGoalSession.Active.SetHeadsetBlock(false, null);
+            PublishArmEStop(link, false);
+        }
+
+        private void RestoreArmEmergencyStop(bool publishPending, bool controllerOwned = true)
+        {
+            _armEStopLatched = true;
+            _armEStopController = controllerOwned;
+            _armEStopResetAccepted = false;
+            _armEStopDeadmanReleased = false;
+            _armEStopPublishPending = publishPending;
+            NavGoalSession.Active.SetHeadsetBlock(true, null);
+        }
+
+        private void ClearArmEStopLocal()
+        {
+            _armEStopLatched = false;
+            _armEStopController = false;
+            _armEStopResetAccepted = false;
+            _armEStopDeadmanReleased = false;
+            _armEStopPublishPending = false;
+        }
+
+        private void FlushArmEStop(IRobotLink link)
+        {
+            if (!_armEStopPublishPending || !_armEStopLatched) return;
+            if (link == null || !link.IsConnected) return;
+            PublishArmEStop(link, true);
+            _armEStopPublishPending = false;
+        }
+
+        private void PublishArmEStop(IRobotLink link, bool stop)
+        {
+            if (link == null || !link.IsConnected || Profile?.Topics == null) return;
+            if (!string.IsNullOrEmpty(Profile.Topics.EmergencyStop))
+                link.Publish(Profile.Topics.EmergencyStop, new BoolMsg(stop));
+            if (stop && !string.IsNullOrEmpty(Profile.Topics.CmdVel))
+                link.Publish(Profile.Topics.CmdVel, new TwistMsg(new Vector3Msg(0f, 0f, 0f), new Vector3Msg(0f, 0f, 0f)));
         }
 
         /// <summary>

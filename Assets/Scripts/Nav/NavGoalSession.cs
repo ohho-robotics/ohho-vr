@@ -12,7 +12,8 @@ namespace OmniBot.VR.Nav
     /// <c>navigate_to_pose</c>, <c>/control_mode</c> becomes <c>nav2</c>, and the
     /// HUD reads <c>/plan</c> plus action feedback (status, ETA, distance).
     /// Stick override and the cancel button both publish <c>/mission/cancel</c>
-    /// and cancel the action goal.
+    /// and cancel the action goal. A latched e-stop cancels the goal and
+    /// refuses another until that latch is cleared.
     /// </summary>
     public sealed class NavGoalSession
     {
@@ -37,6 +38,15 @@ namespace OmniBot.VR.Nav
         private readonly List<NamedWaypoint> _waypoints = WaypointCatalog.ApartmentContract();
         private string _goalId;
         private string _robotKey;
+        private bool _headsetBlocksNav;
+        private bool _robotBlocksNav;
+
+        /// <summary>
+        /// True while a headset e-stop, the operate-screen latch, or the robot
+        /// safety latch is holding. New goals and <c>nav2</c> mode requests wait.
+        /// </summary>
+        public bool CommandsBlocked =>
+            _headsetBlocksNav || _robotBlocksNav || OperateSafetyLatch.UiEStopLatched;
 
         public IReadOnlyList<NamedWaypoint> Waypoints => _waypoints;
 
@@ -45,8 +55,60 @@ namespace OmniBot.VR.Nav
             Changed = null;
             Transport = null;
             _robotKey = null;
+            _headsetBlocksNav = false;
+            _robotBlocksNav = false;
             DeploymentKind = RobotDeployment.Real;
             ClearNavigation();
+        }
+
+        /// <summary>Headset or operate latch. A robot latch is left alone.</summary>
+        public void SetHeadsetBlock(bool blocked, IRobotLink link)
+        {
+            if (!blocked)
+            {
+                if (!_headsetBlocksNav) return;
+                _headsetBlocksNav = false;
+                Changed?.Invoke();
+                return;
+            }
+            _headsetBlocksNav = true;
+            CancelForEStop(link);
+        }
+
+        /// <summary>
+        /// Robot <c>/ohho/safety/state</c> latch. Clearing it does not release
+        /// a headset latch that is still held.
+        /// </summary>
+        public void SetRobotBlock(bool blocked, IRobotLink link)
+        {
+            if (!blocked)
+            {
+                if (!_robotBlocksNav) return;
+                _robotBlocksNav = false;
+                Changed?.Invoke();
+                return;
+            }
+            if (_robotBlocksNav && !GoalActive && !ModeIsNav2 && string.IsNullOrEmpty(_goalId))
+                return;
+            _robotBlocksNav = true;
+            CancelForEStop(link);
+        }
+
+        /// <summary>Cancel the live goal and leave the session in teleop.</summary>
+        public void CancelForEStop(IRobotLink link)
+        {
+            if (!GoalActive && !ModeIsNav2 && string.IsNullOrEmpty(_goalId))
+                return;
+            SendMissionCancel(link);
+            SendActionCancel();
+            GoalActive = false;
+            _goalId = null;
+            ObservedMode = "teleop";
+            StatusText = "e-stop";
+            EtaSeconds = null;
+            DistanceRemaining = null;
+            Plan = null;
+            Changed?.Invoke();
         }
 
         public void SetDeployment(string kind)
@@ -128,6 +190,12 @@ namespace OmniBot.VR.Nav
         public bool SendGoal(NamedWaypoint wp)
         {
             if (wp == null) return false;
+            if (CommandsBlocked)
+            {
+                StatusText = "e-stop";
+                Changed?.Invoke();
+                return false;
+            }
             var transport = Effective;
             if (transport == null || !transport.IsConnected)
             {
@@ -169,6 +237,12 @@ namespace OmniBot.VR.Nav
         public void RequestMode(string mode)
         {
             if (string.IsNullOrEmpty(mode)) return;
+            if (string.Equals(mode, "nav2", StringComparison.OrdinalIgnoreCase) && CommandsBlocked)
+            {
+                StatusText = "e-stop";
+                Changed?.Invoke();
+                return;
+            }
             var transport = Effective;
             if (transport == null || !transport.IsConnected)
             {

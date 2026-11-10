@@ -390,6 +390,32 @@ namespace OmniBot.VR.Tests
                 DeltaTime = 0.1f,
             };
             scheme.Tick(ref reset, link);
+            // Left X starts the clear. The latch stays set until the deadman is
+            // released and pressed again. The operate latch is off for this path.
+            Assert.IsTrue(scheme.IsEmergencyStopActive, "Reset alone does not clear e-stop");
+            Assert.IsFalse(OperateSafetyLatch.UiEStopLatched);
+            Assert.IsFalse(SawBool(link, false));
+            Assert.AreEqual(0, NonZeroTwists(link));
+
+            var releaseDeadman = new TeleopInput
+            {
+                LeftGrip = false,
+                LeftStick = new Vector2(0f, 1f),
+                DeltaTime = 0.1f,
+            };
+            scheme.Tick(ref releaseDeadman, link);
+            Assert.IsTrue(scheme.IsEmergencyStopActive, "Releasing the deadman does not clear e-stop");
+            Assert.IsFalse(SawBool(link, false));
+            Assert.AreEqual(0, NonZeroTwists(link));
+
+            link.Published.Clear();
+            var repress = new TeleopInput
+            {
+                LeftGrip = true,
+                LeftStick = new Vector2(0f, 1f),
+                DeltaTime = 0.1f,
+            };
+            scheme.Tick(ref repress, link);
             Assert.IsFalse(scheme.IsEmergencyStopActive);
             Assert.IsTrue(SawBool(link, false));
             Assert.Greater(NonZeroTwists(link), 0);
@@ -414,7 +440,52 @@ namespace OmniBot.VR.Tests
             OperateSafetyLatch.Clear();
             link.Published.Clear();
             scheme.ReleaseUiStop(link, gripHeld: false);
+            Assert.IsTrue(scheme.IsEmergencyStopActive,
+                "Operate reset does not clear a both-grips latch");
+            Assert.IsFalse(SawBool(link, false),
+                "Operate reset must not publish emergency_stop false over a controller latch");
+
+            var deadmanHeld = new TeleopInput
+            {
+                LeftGrip = true,
+                LeftStick = new Vector2(0f, 1f),
+                DeltaTime = 0.1f,
+            };
+            scheme.Tick(ref deadmanHeld, link);
+            Assert.IsTrue(scheme.IsEmergencyStopActive,
+                "A held deadman does not clear the controller latch");
+
+            var reset = new TeleopInput { ResetEmergencyStop = true, LeftGrip = true, DeltaTime = 0.1f };
+            scheme.Tick(ref reset, link);
+            var releaseDeadman = new TeleopInput { LeftGrip = false, DeltaTime = 0.1f };
+            scheme.Tick(ref releaseDeadman, link);
+            link.Published.Clear();
+            var repress = new TeleopInput
+            {
+                LeftGrip = true,
+                LeftStick = new Vector2(0f, 1f),
+                DeltaTime = 0.1f,
+            };
+            scheme.Tick(ref repress, link);
             Assert.IsFalse(scheme.IsEmergencyStopActive);
+            Assert.IsTrue(SawBool(link, false));
+
+            var operateOnly = new DifferentialDriveScheme();
+            operateOnly.Configure(DriveProfile());
+            OperateSafetyLatch.Latch();
+            var drive = new TeleopInput
+            {
+                LeftGrip = true,
+                LeftStick = new Vector2(0f, 1f),
+                DeltaTime = 0.1f,
+            };
+            operateOnly.Tick(ref drive, link);
+            Assert.IsTrue(operateOnly.IsEmergencyStopActive);
+            OperateSafetyLatch.Clear();
+            link.Published.Clear();
+            operateOnly.ReleaseUiStop(link, gripHeld: false);
+            Assert.IsFalse(operateOnly.IsEmergencyStopActive,
+                "An operate-screen stop still clears when that latch is reset");
             Assert.IsTrue(SawBool(link, false));
         }
 

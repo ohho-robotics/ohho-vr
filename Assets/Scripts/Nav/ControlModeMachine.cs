@@ -120,6 +120,19 @@ namespace OmniBot.VR.Nav
             float dt)
         {
             if (mode == null || session == null) return;
+            if (session.CommandsBlocked)
+            {
+                // A latched e-stop must not publish nav2 when the sticks go idle.
+                bool wasNav = session.GoalActive || session.ModeIsNav2;
+                if (wasNav)
+                    session.CancelForEStop(link);
+                if (wasNav && link != null && link.IsConnected && !string.IsNullOrEmpty(controlModeTopic))
+                {
+                    link.Publish(controlModeTopic, new StringMsg(ControlModeMachine.TeleopMode));
+                    session.NoteModePublished(ControlModeMachine.TeleopMode);
+                }
+                return;
+            }
             mode.Observe(session.ModeIsNav2 || session.GoalActive);
             var decision = mode.Tick(hasInput, dt);
             if (decision.CancelNavGoal)

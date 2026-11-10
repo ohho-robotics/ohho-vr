@@ -164,6 +164,11 @@ namespace OmniBot.VR.Comfort
                 BothGrips = input.BothGrips,
                 BothGripsPressed = input.BothGripsPressed,
                 BothGripsReleased = input.BothGripsReleased,
+                RightTrigger = input.RightTrigger,
+                ButtonA = input.ButtonA,
+                ButtonB = input.ButtonB,
+                EmergencyStopPressed = input.EmergencyStopPressed,
+                HudEmergencyStop = input.HudEmergencyStop,
                 ResetEmergencyStop = input.ResetEmergencyStop,
                 DeltaTime = input.DeltaTime,
             };

@@ -96,7 +96,7 @@ Tagged sideload builds (GitHub Release APK, SideQuest listing draft, and install
 
 ## 4. Edit-mode tests
 
-The NUnit fixtures are in `Assets/Scripts/Editor/Tests/` (namespace `OmniBot.VR.Tests`). Of the earlier fixtures, 39 are 13 drive-spec, 11 control-scheme factory, 9 calibration, and 6 Fabrik IK. This branch adds the Nav2 goal fixtures. Main adds the teleop deadman and e-stop fixtures, the latency-budget fixtures, which also run without Unity, the sim-screen fixtures, the operator-rules acknowledgement fixtures, and the session-picker fixtures. Feature fixtures under `Assets/Scripts/Detection/Editor/` and `Assets/Scripts/AR/Editor/` use that same namespace and the same `OmniBot.VR.Tests` filter. CI skips the Unity steps until the Unity licence secrets are set. Run the Unity suite locally in batch mode.
+The NUnit fixtures are in `Assets/Scripts/Editor/Tests/` (namespace `OmniBot.VR.Tests`). Of the earlier fixtures, 39 are 13 drive-spec, 11 control-scheme factory, 9 calibration, and 6 Fabrik IK. The teleop fixtures cover the deadman (on by default), latched e-stop (both grips, A+B, and the HUD button; clear takes Reset plus a deadman release and re-press), and the OmniBot hard caps (0.2 m/s and 1.0 rad/s after calibration and turbo). Turbo is disabled on a real robot. This checkout also has the Nav2 goal fixtures. Main also has the latency-budget fixtures, which run without Unity, plus the sim-screen fixtures, the operator-rules acknowledgement fixtures, and the session-picker fixtures. Feature fixtures under `Assets/Scripts/Detection/Editor/` and `Assets/Scripts/AR/Editor/` use that same namespace and the same `OmniBot.VR.Tests` filter. CI skips the Unity steps until the Unity licence secrets are set. Run the Unity suite locally in batch mode.
 
 CI runs these edit-mode tests with GameCI (`.github/workflows/unity-tests.yml`) once three repository secrets are set at Settings → Secrets and variables → Actions (https://github.com/ohho-robotics/OhhO-VR/settings/secrets/actions): `UNITY_LICENSE` (the full contents of a Unity personal licence `.ulf` file, e.g. `C:\ProgramData\Unity\Unity_lic.ulf` on Windows), `UNITY_EMAIL` and `UNITY_PASSWORD` (the Unity ID account that owns that licence). Until they are set the workflow skips the Unity steps and passes. When the secrets are set, `scripts/check-editmode-results.py` reads `test-results/editmode-results.xml` (artifact name `editmode-test-results`) and fails the job if that file is missing or reports zero executed tests (passed + failed + inconclusive = 0). The counts are written to the job summary.
 
@@ -188,10 +188,12 @@ Screenshot the floor panel in a sim session and on the real robot. This checkout
 | Left thumbstick Y | Forward / backward (linear.x) |
 | Left thumbstick X | Strafe left / right (linear.y) |
 | Right thumbstick X | Rotate left / right (angular.z) |
-| Left / Right grip (hold) | Deadman, on by default. Hold one grip to drive. Release publishes zero velocity. Opting out is explicit and editor or simulator only. |
-| Right grip (hold) | Turbo. Stick deflection is scaled by 2, then clamped to ±1, and linear speed is capped at the minimum of `MaxLinVel` and 0.2 m/s. Full stick is not faster than that cap. Right grip alone also counts as the deadman. |
+| Left grip (hold) | Deadman, on by default. Release publishes zero velocity on that same tick. A real robot cannot turn it off. A kind=sim session in the editor may. The HUD shows ON or OFF. |
+| Right grip (hold) | Not ground turbo and not the ground deadman. On a quadrotor either grip is the deadman, and both grips are e-stop. |
+| Right index trigger | Arm clutch. In a kind=sim session it is also base turbo (2×), then clamped to the robot hard cap (OmniBot 0.2 m/s and 1.0 rad/s). Disabled on a real robot. |
 | **Both grips simultaneously** | Latches emergency stop, publishes `/emergency_stop` true, and publishes zero velocity. Releasing the grips does not clear it. Not a hardware e-stop — [docs/safety.md](docs/safety.md) |
-| Left controller X | Resets a latched emergency stop. Ignored while both grips are still held. The same button also requests arm enable. |
+| **A + B, or the HUD e-stop button** | Latches emergency stop the same way. Releasing A+B or the HUD button does not clear it. |
+| Left controller X (Reset) | Starts clearing a latched e-stop. Motion stays stopped until the deadman is released and pressed again. Ignored while both grips or A+B are still held. The same button also requests arm enable. |
 | Left controller B | Hide / show the OhhO Screen |
 | Right thumbstick press | Cycle camera (a sim session also has a Chase / Front / Wrist / BEV strip) |
 

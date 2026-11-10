@@ -6,7 +6,9 @@ namespace OmniBot.VR.Control.Drive
     /// <summary>
     /// Holonomic mecanum base drive — the OmniBot reference. Left thumbstick →
     /// vx/vy strafe, right thumbstick X → yaw. Linear speed uses
-    /// <c>profile.MaxLinVel</c>, and turbo is additionally clamped to 0.2 m/s.
+    /// <see cref="DriveSchemeBase.ActiveLinVelLimit"/>, and the vector magnitude
+    /// is clamped to that same active limit so a diagonal stays at or under
+    /// the calibrated <c>MaxLinVel</c>.
     /// E-stop, turbo, publish timing and
     /// control-mode management are inherited from <see cref="DriveSchemeBase"/>.
     /// </summary>
@@ -25,7 +27,7 @@ namespace OmniBot.VR.Control.Drive
 
             float vx    = Mathf.Clamp(ly * speedMult, -1f, 1f) * ActiveLinVelLimit;
             float vy    = Mathf.Clamp(lx * speedMult, -1f, 1f) * ActiveLinVelLimit;
-            float omega = Mathf.Clamp(-rx * speedMult, -1f, 1f) * Profile.MaxAngVel;
+            float omega = Mathf.Clamp(-rx * speedMult, -1f, 1f) * ActiveAngVelLimit;
 
             return new TwistMsg(
                 new Vector3Msg(vx, vy, 0f),

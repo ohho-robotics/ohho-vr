@@ -282,6 +282,9 @@ namespace OmniBot.VR.App
                 return false;
             }
 
+            // FromDescriptor leaves Kind at the real default. The confirmed
+            // session is what decides turbo and the deadman rules.
+            RealRobotSafety.ApplyActiveSession(profile);
             PreparePolicyPanel(ActiveSession.Current != null ? ActiveSession.Current.Kind : (SessionKind?)null);
             teleopController.StartTeleop(profile);
             if (showUi) ShowTeleop();
@@ -299,7 +302,10 @@ namespace OmniBot.VR.App
             var catalog = RobotProfileFactory.FromGarageRobot(_activeRobot);
             if (catalog == null) return null;
 
-            var conn = ConnectionManager.Instance;
+            // A manager that does not exist yet has no descriptor. Creating one
+            // here only DontDestroyOnLoad an empty object, which edit-mode tests
+            // cannot do. An active session already has the manager.
+            ConnectionManager conn = ConnectionManager.HasInstance ? ConnectionManager.Instance : null;
             if (_descriptor == null && conn != null)
                 _descriptor = conn.LatestDescriptor;
 

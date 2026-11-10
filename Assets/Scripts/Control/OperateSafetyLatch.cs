@@ -1,11 +1,11 @@
 namespace OmniBot.VR.Control
 {
     /// <summary>
-    /// Operate-screen e-stop latch. Grip e-stop stays latched until left X even
-    /// when this is clear; releasing the grips does not clear it. While this is
-    /// set, left X is refused and autonomous mode changes are not published.
-    /// Only an explicit operate reset clears this latch. This never turns a
-    /// stop off by itself.
+    /// Operate-screen e-stop latch. A grip, A+B, or HUD stop stays latched until
+    /// Reset plus a deadman release and re-press, even when this latch is clear.
+    /// Releasing the grips does not clear it. While this is set, that clear is
+    /// refused and autonomous mode changes are not published. Only an explicit
+    /// operate reset clears this latch. This never turns a stop off by itself.
     /// </summary>
     public static class OperateSafetyLatch
     {

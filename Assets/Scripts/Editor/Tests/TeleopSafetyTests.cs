@@ -1,11 +1,14 @@
+using System;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using NUnit.Framework;
 using UnityEngine;
 using OmniBot.VR.Control;
 using OmniBot.VR.Control.Drive;
+using OmniBot.VR.Control.Manip;
 using OmniBot.VR.Control.Safety;
 using OmniBot.VR.Core;
+using OmniBot.VR.Nav;
 
 namespace OmniBot.VR.Tests
 {
@@ -27,6 +30,8 @@ namespace OmniBot.VR.Tests
         [SetUp]
         public void SetUp()
         {
+            OperateSafetyLatch.Clear();
+            NavGoalSession.Active.ResetForTests();
             _clock = 5000;
             _link = new FakeRobotLink();
             _session = new TeleopSafetySession(() => _clock);
@@ -186,7 +191,7 @@ namespace OmniBot.VR.Tests
         public void HeldGripAcrossReconnect_DoesNotCountUntilReleaseAndPress()
         {
             var input = Forward(0.1f);
-            input.RightGrip = true;
+            input.LeftGrip = true;
             _session.Start(_link);
             _session.Tick(_link, ref input, _drive, null, null);
 
@@ -200,12 +205,12 @@ namespace OmniBot.VR.Tests
             Assert.IsTrue(_session.AwaitingDeadman);
             AssertNoForwardAfter(_link, mark);
 
-            input.RightGrip = false;
+            input.LeftGrip = false;
             _session.Tick(_link, ref input, _drive, null, null);
             Assert.IsTrue(_session.AwaitingDeadman);
             AssertNoForwardAfter(_link, mark);
 
-            input.RightGrip = true;
+            input.LeftGrip = true;
             input.DeltaTime = 0.1f;
             _session.Tick(_link, ref input, _drive, null, null);
             Assert.IsFalse(_session.AwaitingDeadman);
@@ -307,6 +312,131 @@ namespace OmniBot.VR.Tests
             Assert.IsTrue(_session.AwaitingDeadman);
             Assert.IsTrue(SawEstopTrue(_link));
             AssertNoForwardAfter(_link, mark);
+        }
+
+        [Test]
+        public void GroundDeadman_StaysLeftGrip()
+        {
+            Assert.IsTrue(TeleopSafetySession.IsDeadmanHeld(new TeleopInput { LeftGrip = true }));
+            Assert.IsFalse(TeleopSafetySession.IsDeadmanHeld(new TeleopInput { RightGrip = true }));
+            Assert.IsFalse(TeleopSafetySession.IsDeadmanHeld(
+                new TeleopInput { LeftGrip = true, RightGrip = true, BothGrips = true }));
+        }
+
+        [Test]
+        public void AAndB_StopsTheArm_AndKeepsItStoppedAfterRelease()
+        {
+            AssertArmStoppedBy(input =>
+            {
+                input.ButtonA = true;
+                input.ButtonB = true;
+                input.EmergencyStopPressed = true;
+                return input;
+            }, "A+B");
+        }
+
+        [Test]
+        public void HudEmergencyStop_StopsTheArm_AndKeepsItStoppedAfterTheButton()
+        {
+            AssertArmStoppedBy(input =>
+            {
+                input.HudEmergencyStop = true;
+                return input;
+            }, "HUD");
+        }
+
+        [Test]
+        public void BothGrips_StopsTheArm_AndKeepsItStoppedAfterRelease()
+        {
+            AssertArmStoppedBy(input =>
+            {
+                input.LeftGrip = true;
+                input.RightGrip = true;
+                input.BothGrips = true;
+                input.BothGripsPressed = true;
+                return input;
+            }, "both grips");
+        }
+
+        [Test]
+        public void AAndB_HeldAcrossLinkDrop_StaysLatchedAfterReconnect()
+        {
+            var input = Forward(0.1f);
+            input.LeftGrip = true;
+            _session.Start(_link);
+            _session.Tick(_link, ref input, _drive, null, null);
+            Assert.IsFalse(_drive.IsEmergencyStopActive);
+
+            _link.IsConnected = false;
+            int dropped = _link.Published.Count;
+            input.ButtonA = true;
+            input.ButtonB = true;
+            input.EmergencyStopPressed = true;
+            input.DeltaTime = 0.1f;
+            _session.Tick(_link, ref input, _drive, null, null);
+            Assert.IsTrue(_drive.IsEmergencyStopActive, "A+B edge while the link is down still latches");
+            Assert.AreEqual(dropped, _link.Published.Count, "A down link must not publish the stop");
+
+            _link.IsConnected = true;
+            input.EmergencyStopPressed = false;
+            input.ButtonA = true;
+            input.ButtonB = true;
+            input.LeftStick = new Vector2(0f, 1f);
+            input.LeftGrip = true;
+            input.DeltaTime = 0.1f;
+            int mark = _link.Published.Count;
+            _session.Tick(_link, ref input, _drive, null, null);
+            Assert.IsTrue(_drive.IsEmergencyStopActive, "A+B still held after reconnect stays latched");
+            Assert.IsTrue(SawEstopTrue(_link));
+            AssertNoForwardAfter(_link, mark);
+        }
+
+        void AssertArmStoppedBy(Func<TeleopInput, TeleopInput> armStop, string source)
+        {
+            var origin = new GameObject("estop-arm-" + source);
+            try
+            {
+                var profile = MakeProfile();
+                profile.HasArm = true;
+                profile.ArmDof = 6;
+                profile.Deployment = ArmDeployment.Sim;
+                profile.Topics.ArmEnable = "/arm/enable";
+                var arm = new HandIK6DofScheme();
+                arm.Configure(profile, origin.transform);
+                arm.SetArmEnabled(true, _link);
+                Assert.IsTrue(arm.ArmEnabled, source);
+
+                _session.Start(_link);
+                var input = Forward(0.1f);
+                input.LeftGrip = true;
+                int ticks = 0;
+                Action tick = () => ticks++;
+                _session.Tick(_link, ref input, _drive, arm, tick);
+                Assert.AreEqual(1, ticks, source);
+                Assert.IsTrue(arm.ArmEnabled, source);
+
+                input = armStop(input);
+                input.DeltaTime = 0.1f;
+                _session.Tick(_link, ref input, _drive, arm, tick);
+                Assert.AreEqual(1, ticks, source + " must not keep ticking the arm");
+                Assert.IsFalse(arm.ArmEnabled, source);
+                Assert.IsTrue(_drive.IsEmergencyStopActive, source);
+
+                input.ButtonA = false;
+                input.ButtonB = false;
+                input.EmergencyStopPressed = false;
+                input.HudEmergencyStop = false;
+                input.BothGrips = false;
+                input.BothGripsPressed = false;
+                _session.Tick(_link, ref input, _drive, arm, tick);
+                Assert.AreEqual(1, ticks, source + " latch keeps the arm stopped after the control is released");
+                Assert.IsFalse(arm.ArmEnabled, source);
+                Assert.IsTrue(_drive.IsEmergencyStopActive, source);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(origin);
+            }
         }
 
         [Test]

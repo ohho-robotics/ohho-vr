@@ -5,6 +5,7 @@ using UnityEngine;
 using OmniBot.VR.Control.Drive;
 using OmniBot.VR.Control.Manip;
 using OmniBot.VR.Core;
+using OmniBot.VR.Nav;
 
 namespace OmniBot.VR.Control.Safety
 {
@@ -97,7 +98,10 @@ namespace OmniBot.VR.Control.Safety
 
         public static bool IsDeadmanHeld(in TeleopInput input)
         {
-            return (input.LeftGrip || input.RightGrip) && !input.BothGrips;
+            // Left grip is the ground deadman. Right grip alone does not enable
+            // motion, and both grips are an e-stop chord rather than a second
+            // deadman. Aerial clear and post-loss unstick use either grip.
+            return input.LeftGrip && !input.BothGrips;
         }
 
         /// <summary>
@@ -259,8 +263,9 @@ namespace OmniBot.VR.Control.Safety
         /// <summary>
         /// One control frame. Heartbeat is paced here. Drive is suppressed while
         /// latched, while the operator or the link is gone, and until a deadman
-        /// re-press after either returns. E-stop edges inside the drive scheme
-        /// still run.
+        /// re-press after either returns. E-stop is sampled even when the link
+        /// is down, so an A+B edge is not dropped. Manipulation stops while the
+        /// local drive latch is set (both grips, A+B, or the HUD button).
         /// </summary>
         public void Tick(IRobotLink link, ref TeleopInput input, IDriveScheme drive, IManipulationScheme manip, Action tickManip)
         {
@@ -273,12 +278,19 @@ namespace OmniBot.VR.Control.Safety
             bool allow = AllowsDrive(deadman);
 
             if (drive is DriveSchemeBase gated)
+            {
+                gated.NoteRobotEStop(_latched, link);
                 gated.SuppressMotion = !allow;
+            }
+            else
+                NavGoalSession.Active.SetRobotBlock(_latched, link);
 
-            if (link != null && link.IsConnected && drive != null)
+            // The scheme latches with no publish while the link is down.
+            if (drive != null)
                 drive.Tick(ref input, link);
 
-            if (allow)
+            bool driveLatched = drive is DriveSchemeBase scheme && scheme.IsEmergencyStopActive;
+            if (allow && !driveLatched)
             {
                 _manipHeld = false;
                 tickManip?.Invoke();

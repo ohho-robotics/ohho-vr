@@ -63,6 +63,8 @@ namespace OmniBot.VR.Control
             bool so101Family = modelId == "so101-arm" || modelId == "omnibot" || modelId == "omnibot-pro";
             profile.JointZerosCalibrated = so101Family && So101JointZeroConfig.Load().Calibrated;
             SealCatalogCaps(profile);
+            // After the catalog seal, so OmniBot cannot stay above 0.2 m/s and 1.0 rad/s.
+            RobotClassCaps.Ensure(profile);
             return profile;
         }
 

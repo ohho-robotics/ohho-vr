@@ -6,6 +6,7 @@
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
+using OmniBot.VR.Control;
 using OmniBot.VR.Core;
 using OmniBot.VR.Nav;
 
@@ -54,9 +55,6 @@ namespace OmniBot.VR.UI
         [Header("Emergency Stop")]
         [SerializeField] private Button btnEmergencyStop;
 
-        // ── State ─────────────────────────────────────────────────────────────
-        private bool _emergencyStopHeld = false;
-
         // ── Unity lifecycle ──────────────────────────────────────────────────
         private void Start()
         {
@@ -82,10 +80,9 @@ namespace OmniBot.VR.UI
             // AI command
             if (btnAiSend) btnAiSend.onClick.AddListener(OnAiCommandSend);
 
-            // Emergency stop: button down = stop, button up = release
+            // Emergency stop latches. Releasing the button does not clear it.
             if (btnEmergencyStop != null)
             {
-                // Use EventTrigger for press/release or wire via pointer events
                 var et = btnEmergencyStop.gameObject.AddComponent<UnityEngine.EventSystems.EventTrigger>();
 
                 var pressEntry = new UnityEngine.EventSystems.EventTrigger.Entry
@@ -159,18 +156,26 @@ namespace OmniBot.VR.UI
 
         private void OnEmergencyStopPressed()
         {
+            var teleop = FindObjectOfType<TeleopController>();
+            if (teleop != null)
+            {
+                teleop.RequestHudEmergencyStop();
+                Debug.LogWarning("[ControlPanel] EMERGENCY STOP latched from the HUD.");
+                return;
+            }
+
             if (!ROSBridgeClient.Instance.IsConnected) return;
-            _emergencyStopHeld = true;
             ROSBridgeClient.Instance.Publish("/emergency_stop", new BoolMsg(true));
-            Debug.LogWarning("[ControlPanel] EMERGENCY STOP pressed.");
+            ROSBridgeClient.Instance.Publish("/cmd_vel/teleop", new TwistMsg(
+                new Vector3Msg(0f, 0f, 0f),
+                new Vector3Msg(0f, 0f, 0f)));
+            Debug.LogWarning("[ControlPanel] EMERGENCY STOP latched. Release does not clear it.");
         }
 
         private void OnEmergencyStopReleased()
         {
-            if (!ROSBridgeClient.Instance.IsConnected || !_emergencyStopHeld) return;
-            _emergencyStopHeld = false;
-            ROSBridgeClient.Instance.Publish("/emergency_stop", new BoolMsg(false));
-            Debug.Log("[ControlPanel] Emergency stop released.");
+            // Release does not clear a latched e-stop.
+            Debug.Log("[ControlPanel] Emergency stop button released. The latch stays set.");
         }
     }
 }
