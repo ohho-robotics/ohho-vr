@@ -238,7 +238,9 @@ namespace OmniBot.VR.Control
 
         /// <summary>
         /// Comma-separated policy ids, or a JSON model list, used when serve
-        /// <c>GET /models</c> is unavailable. OmniBot's list is the ACT VR
+        /// <c>GET /models</c> is unavailable. Mirrors a <c>policy_models</c> ROS
+        /// param and the lerobot registry (<c>act</c>, <c>smolvla</c>,
+        /// <c>diffusion</c>, <c>openvla</c>). OmniBot's list is the ACT VR
         /// sim-pick checkpoint.
         /// </summary>
         public string PolicyModelsFallback;
@@ -327,14 +329,15 @@ namespace OmniBot.VR.Control
         public string Telemetry;        // descriptor topics.telemetry
         public List<string> Images = new List<string>();
 
-        // Policy panel. Empty skips that publish or subscribe.
-        public string ArmCmdMode;
-        public string PolicyEnable;
-        public string PolicyTask;
-        public string PolicyLoad;
-        public string PolicyModels;
-        public string PolicyCmdVel;
-        public string AiStatus;
+        // Policy panel (OHH-229). Empty skips that publish or subscribe.
+        // Telemetry and ControlModeActive are declared above.
+        public string ArmCmdMode;          // std_msgs/String — /arm/cmd_mode ("policy")
+        public string PolicyEnable;        // std_msgs/Bool — /policy/enable
+        public string PolicyTask;          // std_msgs/String — /policy/task
+        public string PolicyLoad;          // std_msgs/String — /policy/load (checkpoint)
+        public string PolicyModels;        // std_msgs/String — latched model list
+        public string PolicyCmdVel;        // geometry_msgs/Twist — /cmd_vel/vla
+        public string AiStatus;            // std_msgs/String — /ai/status
 
         // Optional perception topics for the SLAM map panel. Blank fields fall
         // back to the OmniBot names (/map, /scan, Nav2 costmaps). OHH-228.
